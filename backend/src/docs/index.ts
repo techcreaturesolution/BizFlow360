@@ -1,4 +1,5 @@
 // Sabhi module ke Swagger docs ko role-wise specs + combined OpenAPI 3.0.3 document mein merge karta hai.
+import { env, isProd } from "../config/env";
 import { authDoc } from "./auth/auth.doc";
 import { businessOwnerDoc } from "./businessOwner/businessOwner.doc";
 import { commonDoc } from "./common/common.doc";
@@ -15,6 +16,15 @@ interface DocModule {
 }
 
 function buildOpenApiSpec(title: string, description: string, modules: DocModule[]) {
+  const localServer = {
+    url: `http://localhost:${env.PORT}`,
+    description: "Local development server",
+  };
+  const productionServer = {
+    url: "https://bizflow360-p3sp.onrender.com",
+    description: "Production server (Render)",
+  };
+
   return {
     openapi: "3.0.3",
     info: {
@@ -22,12 +32,7 @@ function buildOpenApiSpec(title: string, description: string, modules: DocModule
       version: "1.0.0",
       description,
     },
-    servers: [
-      {
-        url: "http://localhost:4000",
-        description: "Local development server",
-      },
-    ],
+    servers: isProd ? [productionServer, localServer] : [localServer, productionServer],
     tags: modules.flatMap((m) => [...m.tags]),
     paths: Object.assign({}, ...modules.map((m) => m.paths)),
     components: {

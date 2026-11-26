@@ -1,0 +1,66 @@
+// Sabhi module ke Swagger docs ko role-wise specs + combined OpenAPI 3.0.3 document mein merge karta hai.
+import { authDoc } from "./auth/auth.doc";
+import { businessOwnerDoc } from "./businessOwner/businessOwner.doc";
+import { commonDoc } from "./common/common.doc";
+import { healthDoc } from "./health/health.doc";
+import { auditDoc } from "./supperadmin/audit.doc";
+import { billingDoc } from "./supperadmin/billing.doc";
+import { plansDoc } from "./supperadmin/plans.doc";
+import { superAdminDoc } from "./supperadmin/superAdmin.doc";
+
+interface DocModule {
+  tags: readonly Record<string, unknown>[];
+  paths: Record<string, unknown>;
+  schemas: Record<string, unknown>;
+}
+
+function buildOpenApiSpec(title: string, description: string, modules: DocModule[]) {
+  return {
+    openapi: "3.0.3",
+    info: {
+      title,
+      version: "1.0.0",
+      description,
+    },
+    servers: [
+      {
+        url: "http://localhost:4000",
+        description: "Local development server",
+      },
+    ],
+    tags: modules.flatMap((m) => [...m.tags]),
+    paths: Object.assign({}, ...modules.map((m) => m.paths)),
+    components: {
+      securitySchemes: commonDoc.securitySchemes,
+      schemas: Object.assign({}, commonDoc.schemas, ...modules.map((m) => m.schemas)),
+    },
+  };
+}
+
+const sharedModules: DocModule[] = [healthDoc, authDoc];
+const superAdminModules: DocModule[] = [superAdminDoc, plansDoc, billingDoc, auditDoc];
+const businessOwnerModules: DocModule[] = [businessOwnerDoc];
+
+export const sharedSwaggerDocument = buildOpenApiSpec(
+  "BizFlow360 - Auth & Health APIs",
+  "Shared login, registration, profile, and server health endpoints.",
+  sharedModules,
+);
+
+export const superAdminSwaggerDocument = buildOpenApiSpec(
+  "BizFlow360 - Super Admin APIs",
+  "Platform owner (SUPER_ADMIN) dashboard endpoints.",
+  superAdminModules,
+);
+
+export const businessOwnerSwaggerDocument = buildOpenApiSpec(
+  "BizFlow360 - Business Owner APIs",
+  "Company owner and workspace dashboard endpoints.",
+  businessOwnerModules,
+);
+
+export const swaggerDocument = buildOpenApiSpec(
+  "BizFlow360 - All APIs",
+  "Complete BizFlow360 backend API documentation (Super Admin, Business Owner, and Shared Auth).",
+  [...sharedModules, ...superAdminModules, ...businessOwnerModules],
+);

@@ -12,6 +12,7 @@ import {
   sharedSwaggerDocument,
   superAdminSwaggerDocument,
   swaggerDocument,
+  withDynamicServers,
 } from "./docs";
 import routes from "./routes";
 import { apiLimiter } from "./middlewares/rateLimiter";
@@ -71,10 +72,18 @@ app.get("/health/ready", async (_req, res, next) => {
 app.get("/", (_req, res) => sendSuccess(res, { status: "ok" }));
 
 // Swagger API docs (Role-wise dropdown + Search filter)
-app.get("/docs/swagger.json", (_req, res) => res.json(swaggerDocument));
-app.get("/docs/super-admin.json", (_req, res) => res.json(superAdminSwaggerDocument));
-app.get("/docs/business-owner.json", (_req, res) => res.json(businessOwnerSwaggerDocument));
-app.get("/docs/auth.json", (_req, res) => res.json(sharedSwaggerDocument));
+app.get("/docs/swagger.json", (req, res) =>
+  res.json(withDynamicServers(swaggerDocument, req.headers.host)),
+);
+app.get("/docs/super-admin.json", (req, res) =>
+  res.json(withDynamicServers(superAdminSwaggerDocument, req.headers.host)),
+);
+app.get("/docs/business-owner.json", (req, res) =>
+  res.json(withDynamicServers(businessOwnerSwaggerDocument, req.headers.host)),
+);
+app.get("/docs/auth.json", (req, res) =>
+  res.json(withDynamicServers(sharedSwaggerDocument, req.headers.host)),
+);
 app.use(
   "/docs",
   swaggerUi.serve,

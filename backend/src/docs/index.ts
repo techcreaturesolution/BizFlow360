@@ -15,7 +15,7 @@ interface DocModule {
   schemas: Record<string, unknown>;
 }
 
-function buildOpenApiSpec(title: string, description: string, modules: DocModule[]) {
+function getOrderedServers(host?: string) {
   const localServer = {
     url: `http://localhost:${env.PORT}`,
     description: "Local development server",
@@ -25,6 +25,22 @@ function buildOpenApiSpec(title: string, description: string, modules: DocModule
     description: "Production server (Render)",
   };
 
+  if (host) {
+    const isLocalHost = host.startsWith("localhost") || host.startsWith("127.0.0.1");
+    return isLocalHost ? [localServer, productionServer] : [productionServer, localServer];
+  }
+
+  return isProd ? [productionServer, localServer] : [localServer, productionServer];
+}
+
+export function withDynamicServers<T extends { servers: unknown[] }>(doc: T, host?: string): T {
+  return {
+    ...doc,
+    servers: getOrderedServers(host),
+  };
+}
+
+function buildOpenApiSpec(title: string, description: string, modules: DocModule[]) {
   return {
     openapi: "3.0.3",
     info: {
@@ -32,7 +48,7 @@ function buildOpenApiSpec(title: string, description: string, modules: DocModule
       version: "1.0.0",
       description,
     },
-    servers: isProd ? [productionServer, localServer] : [localServer, productionServer],
+    servers: getOrderedServers(),
     tags: modules.flatMap((m) => [...m.tags]),
     paths: Object.assign({}, ...modules.map((m) => m.paths)),
     components: {

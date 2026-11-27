@@ -16,6 +16,9 @@ export const businessOwnerDoc = {
         security: [{ bearerAuth: [] }],
         parameters: [
           { name: "status", in: "query", schema: { type: "string", enum: ["ACTIVE", "INACTIVE", "INVITED", "SUSPENDED"] } },
+          { name: "role_id", in: "query", schema: { type: "string", format: "uuid" } },
+          { name: "branch_id", in: "query", schema: { type: "string" } },
+          { name: "department_id", in: "query", schema: { type: "string" } },
           { name: "branch", in: "query", schema: { type: "string" } },
           { name: "department", in: "query", schema: { type: "string" } },
           { name: "search", in: "query", schema: { type: "string" }, description: "Search by name, email, or phone" },
@@ -122,6 +125,7 @@ export const businessOwnerDoc = {
                 required: ["status"],
                 properties: {
                   status: { type: "string", enum: ["ACTIVE", "INACTIVE"] },
+                  reason: { type: "string", example: "Employee resigned / temporary suspension" },
                 },
               },
             },

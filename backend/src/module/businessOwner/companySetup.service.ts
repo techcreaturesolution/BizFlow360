@@ -134,7 +134,8 @@ export async function updateCompanyProfile(
   if (input.locale !== undefined) updateData.locale = input.locale;
   if (input.defaultCurrency !== undefined) updateData.defaultCurrency = input.defaultCurrency;
   if (input.timezone !== undefined) updateData.timezone = input.timezone;
-  if (input.financialYear !== undefined) updateData.financialYear = input.financialYear;
+  const incomingFinancialYear = input.financialYear ?? input.financialYearStart;
+  if (incomingFinancialYear !== undefined) updateData.financialYear = incomingFinancialYear;
   if (input.dateFormat !== undefined) updateData.dateFormat = input.dateFormat;
   if (incomingNumbering !== undefined) {
     updateData.numberingPreferences = {

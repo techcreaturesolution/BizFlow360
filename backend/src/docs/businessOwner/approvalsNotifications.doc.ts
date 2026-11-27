@@ -100,7 +100,9 @@ export const approvalsNotificationsDoc = {
         description: "Returns paginated in-app alerts and total unreadCount for the logged-in user.",
         security: [{ bearerAuth: [] }],
         parameters: [
+          { name: "unread_only", in: "query", schema: { type: "string", enum: ["true", "false"] } },
           { name: "isRead", in: "query", schema: { type: "string", enum: ["true", "false"] } },
+          { name: "channel", in: "query", schema: { type: "string", enum: ["IN_APP", "EMAIL"] } },
           { name: "category", in: "query", schema: { type: "string", enum: ["APPROVAL", "BILLING", "TEAM", "SALES", "FINANCE", "GENERAL"] } },
           { name: "page", in: "query", schema: { type: "integer", default: 1 } },
           { name: "limit", in: "query", schema: { type: "integer", default: 20 } },

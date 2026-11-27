@@ -7,6 +7,7 @@ import {
   expenseApproveSchema,
   expenseRejectSchema,
   expensesQuerySchema,
+  updateExpenseSchema,
 } from "./finance.model";
 import {
   approveExpense,
@@ -15,6 +16,7 @@ import {
   listExpenses,
   rejectExpense,
   submitExpense,
+  updateExpense,
 } from "./finance.service";
 
 function requireAuthTenant(req: Parameters<RequestHandler>[0]) {
@@ -36,6 +38,13 @@ export const createExpenseHandler: RequestHandler = async (req, res) => {
   const input = createExpenseSchema.parse(req.body);
   const result = await createExpense(auth, input, req.requestId);
   return sendSuccess(res, result, { status: 201 });
+};
+
+export const updateExpenseHandler: RequestHandler = async (req, res) => {
+  const auth = requireAuthTenant(req);
+  const input = updateExpenseSchema.parse(req.body);
+  const result = await updateExpense(auth, req.params.id as string, input, req.requestId);
+  return sendSuccess(res, result);
 };
 
 export const submitExpenseHandler: RequestHandler = async (req, res) => {

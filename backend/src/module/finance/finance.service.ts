@@ -1,5 +1,5 @@
-// Finance Service: Expenses workflow (create, submit, approve, reject) & Accounts Receivable aging.
-import { and, desc, eq, gt, or, sql } from "drizzle-orm";
+// Finance Service: Expenses (Team Scope, Threshold Workflow, Edit/Resubmit) & Accounts Receivable aging.
+import { and, desc, eq, gt, gte, inArray, lte, or, sql } from "drizzle-orm";
 import { db } from "../../db";
 import {
   approvalRequests,
@@ -9,27 +9,81 @@ import {
   salesInvoices,
   tenants,
   users,
+  workflowInstanceSteps,
 } from "../../db/schema";
 import { writeAudit } from "../../lib/audit";
 import { Errors } from "../../lib/errors";
-import { hasTenantWideScope, type AuthContext } from "../../middlewares/guards";
+import { hasTenantWideScope, resolveRecordScope, type AuthContext } from "../../middlewares/guards";
 import type {
   CreateExpenseInput,
   ExpenseApproveInput,
   ExpenseRejectInput,
   ExpensesQuery,
+  UpdateExpenseInput,
 } from "./finance.model";
+
+async function assertExpenseAccess(auth: AuthContext, expenseId: string) {
+  const tenantId = auth.tenantId!;
+  const [expense] = await db
+    .select()
+    .from(financeExpenses)
+    .where(and(eq(financeExpenses.id, expenseId), eq(financeExpenses.tenantId, tenantId)))
+    .limit(1);
+
+  if (!expense) throw Errors.notFound("Expense not found.");
+
+  const scopeCtx = await resolveRecordScope(
+    auth,
+    "FINANCE.EXPENSES.VIEW_ALL",
+    "FINANCE.EXPENSES.VIEW_TEAM",
+  );
+
+  if (scopeCtx.scope === "TEAM_DEPARTMENT") {
+    const inScope =
+      scopeCtx.teamUserIds.includes(expense.ownerUserId) ||
+      (expense.departmentId ? scopeCtx.departmentIds.includes(expense.departmentId) : false);
+    if (!inScope) {
+      throw Errors.forbidden("You do not have access to an expense outside your department/team.");
+    }
+  } else if (scopeCtx.scope === "OWN_ONLY" && expense.ownerUserId !== auth.userId) {
+    throw Errors.forbidden("You do not have access to this expense.");
+  }
+
+  return expense;
+}
 
 export async function listExpenses(auth: AuthContext, query: ExpensesQuery) {
   const tenantId = auth.tenantId!;
-  const isCompanyWide = hasTenantWideScope(auth, "FINANCE.EXPENSES.VIEW_ALL");
+  const scopeCtx = await resolveRecordScope(
+    auth,
+    "FINANCE.EXPENSES.VIEW_ALL",
+    "FINANCE.EXPENSES.VIEW_TEAM",
+  );
+
   const conditions = [eq(financeExpenses.tenantId, tenantId)];
 
-  if (!isCompanyWide) {
+  if (scopeCtx.scope === "TEAM_DEPARTMENT") {
+    const scopeParts = [inArray(financeExpenses.ownerUserId, scopeCtx.teamUserIds)];
+    if (scopeCtx.departmentIds.length > 0) {
+      scopeParts.push(inArray(financeExpenses.departmentId, scopeCtx.departmentIds));
+    }
+    conditions.push(or(...scopeParts)!);
+  } else if (scopeCtx.scope === "OWN_ONLY") {
     conditions.push(eq(financeExpenses.ownerUserId, auth.userId));
   }
+
+  const submittedBy = query.submittedBy ?? query.submitted_by;
+  if (submittedBy) {
+    if (scopeCtx.scope === "TEAM_DEPARTMENT" && !scopeCtx.teamUserIds.includes(submittedBy)) {
+      throw Errors.forbidden("Cannot view expenses of users outside your department/team.");
+    }
+    conditions.push(eq(financeExpenses.ownerUserId, submittedBy));
+  }
+
   if (query.status) conditions.push(eq(financeExpenses.status, query.status));
   if (query.category) conditions.push(eq(financeExpenses.category, query.category));
+  if (query.from) conditions.push(gte(financeExpenses.expenseDate, query.from.slice(0, 10)));
+  if (query.to) conditions.push(lte(financeExpenses.expenseDate, query.to.slice(0, 10)));
 
   const offset = (query.page - 1) * query.limit;
 
@@ -51,7 +105,7 @@ export async function listExpenses(auth: AuthContext, query: ExpensesQuery) {
   const total = totalRow?.count ?? 0;
 
   return {
-    scope: isCompanyWide ? "COMPANY_WIDE" : "OWN_ONLY",
+    scope: scopeCtx.scope,
     expenses: rows.map((r) => ({
       ...r.expense,
       ownerName: r.ownerName ?? null,
@@ -95,8 +149,8 @@ export async function createExpense(
         receiptDocumentId: input.receiptDocumentId ?? null,
         status: "DRAFT",
         ownerUserId: auth.userId,
-        branchId: input.branchId ?? null,
-        departmentId: input.departmentId ?? null,
+        branchId: input.branchId ?? auth.branchId ?? null,
+        departmentId: input.departmentId ?? auth.departmentId ?? null,
       })
       .returning();
 
@@ -122,19 +176,67 @@ export async function createExpense(
   };
 }
 
+export async function updateExpense(
+  auth: AuthContext,
+  expenseId: string,
+  input: UpdateExpenseInput,
+  requestId?: string,
+) {
+  const existing = await assertExpenseAccess(auth, expenseId);
+  if (existing.ownerUserId !== auth.userId && !hasTenantWideScope(auth, "FINANCE.EXPENSES.VIEW_ALL")) {
+    throw Errors.forbidden("Only the owner of this expense can edit it.");
+  }
+  if (existing.status !== "DRAFT" && existing.status !== "REJECTED") {
+    throw Errors.conflict("Only DRAFT or REJECTED expenses can be edited.");
+  }
+
+  const [updated] = await db.transaction(async (tx) => {
+    const rows = await tx
+      .update(financeExpenses)
+      .set({
+        ...(input.category !== undefined && { category: input.category }),
+        ...(input.description !== undefined && { description: input.description }),
+        ...(input.amount !== undefined && { amount: input.amount.toFixed(2) }),
+        ...(input.expenseDate !== undefined && { expenseDate: input.expenseDate }),
+        ...(input.receiptDocumentId !== undefined && { receiptDocumentId: input.receiptDocumentId }),
+        status: "DRAFT",
+        rejectionReason: null,
+        updatedAt: new Date(),
+      })
+      .where(and(eq(financeExpenses.id, expenseId), eq(financeExpenses.tenantId, auth.tenantId!)))
+      .returning();
+
+    await writeAudit(tx, {
+      tenantId: auth.tenantId!,
+      actorUserId: auth.userId,
+      action: "FINANCE.EXPENSE.UPDATE",
+      entityType: "finance_expense",
+      entityId: expenseId,
+      beforeData: { amount: existing.amount, category: existing.category, status: existing.status },
+      afterData: { amount: rows[0].amount, category: rows[0].category, status: rows[0].status },
+      requestId,
+    });
+
+    return rows;
+  });
+
+  return {
+    expense: {
+      ...updated,
+      amount: Number(updated.amount),
+      currency: updated.currency.trim(),
+    },
+  };
+}
+
 export async function submitExpense(
   auth: AuthContext,
   expenseId: string,
   requestId?: string,
 ) {
   const tenantId = auth.tenantId!;
-  const [expense] = await db
-    .select()
-    .from(financeExpenses)
-    .where(and(eq(financeExpenses.id, expenseId), eq(financeExpenses.tenantId, tenantId)))
-    .limit(1);
+  const expense = await assertExpenseAccess(auth, expenseId);
 
-  if (!expense) throw Errors.notFound("Expense not found.");
   if (expense.status !== "DRAFT" && expense.status !== "REJECTED") {
     throw Errors.conflict(`Expense is already ${expense.status}.`);
   }
@@ -147,19 +249,34 @@ export async function submitExpense(
       .where(eq(financeExpenses.id, expenseId))
       .returning();
 
-    // Put in Business Owner / Approver Inbox queue
-    await tx.insert(approvalRequests).values({
+    // Put in Manager / Business Owner Approval Inbox queue + initial workflow step
+    const [approval] = await tx
+      .insert(approvalRequests)
+      .values({
+        tenantId,
+        entityType: "EXPENSE",
+        entityId: expenseId,
+        entityNumber: expense.expenseNo,
+        title: `${expense.category}: ${expense.description.slice(0, 80)}`,
+        amount: expense.amount,
+        currency: expense.currency.trim(),
+        requestedBy: expense.ownerUserId,
+        branchId: expense.branchId,
+        departmentId: expense.departmentId,
+        status: "PENDING",
+        currentStage: "MANAGER_REVIEW",
+      })
+      .returning();
+
+    await tx.insert(workflowInstanceSteps).values({
       tenantId,
-      entityType: "EXPENSE",
-      entityId: expenseId,
-      entityNumber: expense.expenseNo,
-      title: `${expense.category}: ${expense.description.slice(0, 80)}`,
-      amount: expense.amount,
-      currency: expense.currency.trim(),
-      requestedBy: expense.ownerUserId,
-      branchId: expense.branchId,
-      departmentId: expense.departmentId,
-      status: "PENDING",
+      approvalRequestId: approval.id,
+      stepNumber: 1,
+      stepName: "SUBMISSION",
+      action: "SUBMITTED",
+      actorUserId: auth.userId,
+      comment: "Expense submitted for manager review",
+      decidedAt: now,
     });
 
     await writeAudit(tx, {
@@ -169,7 +286,7 @@ export async function submitExpense(
       entityType: "finance_expense",
       entityId: expenseId,
       beforeData: { status: expense.status },
-      afterData: { status: "SUBMITTED" },
+      afterData: { status: "SUBMITTED", approvalRequestId: approval.id },
       requestId,
     });
 
@@ -179,6 +296,9 @@ export async function submitExpense(
   return { expense: updated, message: "Expense submitted for approval." };
 }
 
+// Expense Threshold Workflow (Rule #2 for Manager):
+// - If amount <= tenant.expenseApprovalThreshold (or actor has OWNER / ADMIN / FINANCE.EXPENSES.APPROVE_FINAL): APPROVED directly!
+// - If amount > threshold and actor is Manager: transitions to PENDING_FINANCE for Finance/Owner final review!
 export async function approveExpense(
   auth: AuthContext,
   expenseId: string,
@@ -186,39 +306,47 @@ export async function approveExpense(
   requestId?: string,
 ) {
   const tenantId = auth.tenantId!;
-  const [expense] = await db
-    .select()
-    .from(financeExpenses)
-    .where(and(eq(financeExpenses.id, expenseId), eq(financeExpenses.tenantId, tenantId)))
-    .limit(1);
+  const expense = await assertExpenseAccess(auth, expenseId);
 
-  if (!expense) throw Errors.notFound("Expense not found.");
   if (expense.status === "APPROVED" || expense.status === "PAID") {
     throw Errors.conflict(`Expense is already ${expense.status}.`);
   }
 
+  const [tenant] = await db
+    .select({ expenseApprovalThreshold: tenants.expenseApprovalThreshold })
+    .from(tenants)
+    .where(eq(tenants.id, tenantId))
+    .limit(1);
+
+  const threshold = Number(tenant?.expenseApprovalThreshold ?? 5000);
+  const expenseAmount = Number(expense.amount);
+
+  const hasFinalAuthority =
+    auth.permissions.includes("*") ||
+    auth.roles.includes("OWNER") ||
+    auth.roles.includes("ADMIN") ||
+    auth.permissions.includes("FINANCE.EXPENSES.APPROVE_FINAL");
+
+  const requiresFinanceEscalation = !hasFinalAuthority && expenseAmount > threshold;
+
+  const nextExpenseStatus = requiresFinanceEscalation ? "PENDING_FINANCE" : "APPROVED";
   const now = new Date();
+
   const [updated] = await db.transaction(async (tx) => {
     const rows = await tx
       .update(financeExpenses)
       .set({
-        status: "APPROVED",
-        approvedBy: auth.userId,
-        approvedAt: now,
+        status: nextExpenseStatus,
+        approvedBy: requiresFinanceEscalation ? expense.approvedBy : auth.userId,
+        approvedAt: requiresFinanceEscalation ? expense.approvedAt : now,
         updatedAt: now,
       })
       .where(eq(financeExpenses.id, expenseId))
       .returning();
 
-    await tx
-      .update(approvalRequests)
-      .set({
-        status: "APPROVED",
-        decisionComment: input.comment ?? null,
-        decidedBy: auth.userId,
-        decidedAt: now,
-        updatedAt: now,
-      })
+    const [pendingApproval] = await tx
+      .select()
+      .from(approvalRequests)
       .where(
         and(
           eq(approvalRequests.tenantId, tenantId),
@@ -226,14 +354,53 @@ export async function approveExpense(
           eq(approvalRequests.entityId, expenseId),
           eq(approvalRequests.status, "PENDING"),
         ),
-      );
+      )
+      .limit(1);
+
+    if (pendingApproval) {
+      await tx
+        .update(approvalRequests)
+        .set({
+          status: requiresFinanceEscalation ? "PENDING" : "APPROVED",
+          currentStage: requiresFinanceEscalation ? "FINANCE_REVIEW" : "COMPLETED",
+          decisionComment: input.comment ?? null,
+          decidedBy: requiresFinanceEscalation ? null : auth.userId,
+          decidedAt: requiresFinanceEscalation ? null : now,
+          updatedAt: now,
+        })
+        .where(eq(approvalRequests.id, pendingApproval.id));
+
+      const [{ count: stepsCount }] = await tx
+        .select({ count: sql<number>`count(*)::int` })
+        .from(workflowInstanceSteps)
+        .where(eq(workflowInstanceSteps.approvalRequestId, pendingApproval.id));
+
+      await tx.insert(workflowInstanceSteps).values({
+        tenantId,
+        approvalRequestId: pendingApproval.id,
+        stepNumber: (stepsCount ?? 0) + 1,
+        stepName: pendingApproval.currentStage || "MANAGER_REVIEW",
+        action: requiresFinanceEscalation ? "FORWARDED_TO_FINANCE" : "APPROVED",
+        actorUserId: auth.userId,
+        comment:
+          input.comment ??
+          (requiresFinanceEscalation
+            ? `Manager approved. Amount (${expenseAmount}) exceeds threshold (${threshold}); escalated to Finance.`
+            : "Approved"),
+        decidedAt: now,
+      });
+    }
 
     await tx.insert(notifications).values({
       tenantId,
       userId: expense.ownerUserId,
       category: "FINANCE",
-      title: `Expense ${expense.expenseNo} Approved`,
-      message: `Your expense claim (${expense.expenseNo}) of ${expense.amount} ${expense.currency.trim()} has been approved.`,
+      title: requiresFinanceEscalation
+        ? `Expense ${expense.expenseNo} Forwarded to Finance`
+        : `Expense ${expense.expenseNo} Approved`,
+      message: requiresFinanceEscalation
+        ? `Your expense (${expense.expenseNo}) of ${expenseAmount} ${expense.currency.trim()} passed Manager review and was forwarded to Finance/Accountant (exceeds threshold ${threshold}).`
+        : `Your expense claim (${expense.expenseNo}) of ${expenseAmount} ${expense.currency.trim()} has been approved.`,
       entityType: "EXPENSE",
       entityId: expenseId,
     });
@@ -241,11 +408,18 @@ export async function approveExpense(
     await writeAudit(tx, {
       tenantId,
       actorUserId: auth.userId,
-      action: "FINANCE.EXPENSE.APPROVE",
+      action: requiresFinanceEscalation
+        ? "FINANCE.EXPENSE.FORWARD_FINANCE"
+        : "FINANCE.EXPENSE.APPROVE",
       entityType: "finance_expense",
       entityId: expenseId,
       beforeData: { status: expense.status },
-      afterData: { status: "APPROVED", approvedBy: auth.userId },
+      afterData: {
+        status: nextExpenseStatus,
+        threshold,
+        expenseAmount,
+        actorUserId: auth.userId,
+      },
       reason: input.comment,
       requestId,
     });
@@ -253,7 +427,17 @@ export async function approveExpense(
     return rows;
   });
 
-  return { expense: updated, message: "Expense approved successfully." };
+  return {
+    expense: {
+      ...updated,
+      amount: Number(updated.amount),
+      currency: updated.currency.trim(),
+    },
+    escalatedToFinance: requiresFinanceEscalation,
+    message: requiresFinanceEscalation
+      ? `Manager approved. Amount exceeds company threshold (${threshold}), so forwarded to Finance approval queue.`
+      : "Expense approved successfully.",
+  };
 }
 
 export async function rejectExpense(
@@ -263,13 +447,8 @@ export async function rejectExpense(
   requestId?: string,
 ) {
   const tenantId = auth.tenantId!;
-  const [expense] = await db
-    .select()
-    .from(financeExpenses)
-    .where(and(eq(financeExpenses.id, expenseId), eq(financeExpenses.tenantId, tenantId)))
-    .limit(1);
+  const expense = await assertExpenseAccess(auth, expenseId);
 
-  if (!expense) throw Errors.notFound("Expense not found.");
   if (expense.status === "APPROVED" || expense.status === "PAID") {
     throw Errors.conflict("Approved/paid expense cannot be rejected.");
   }
@@ -288,15 +467,9 @@ export async function rejectExpense(
       .where(eq(financeExpenses.id, expenseId))
       .returning();
 
-    await tx
-      .update(approvalRequests)
-      .set({
-        status: "REJECTED",
-        decisionComment: input.reason,
-        decidedBy: auth.userId,
-        decidedAt: now,
-        updatedAt: now,
-      })
+    const [pendingApproval] = await tx
+      .select()
+      .from(approvalRequests)
       .where(
         and(
           eq(approvalRequests.tenantId, tenantId),
@@ -304,7 +477,38 @@ export async function rejectExpense(
           eq(approvalRequests.entityId, expenseId),
           eq(approvalRequests.status, "PENDING"),
         ),
-      );
+      )
+      .limit(1);
+
+    if (pendingApproval) {
+      await tx
+        .update(approvalRequests)
+        .set({
+          status: "REJECTED",
+          currentStage: "COMPLETED",
+          decisionComment: input.reason,
+          decidedBy: auth.userId,
+          decidedAt: now,
+          updatedAt: now,
+        })
+        .where(eq(approvalRequests.id, pendingApproval.id));
+
+      const [{ count: stepsCount }] = await tx
+        .select({ count: sql<number>`count(*)::int` })
+        .from(workflowInstanceSteps)
+        .where(eq(workflowInstanceSteps.approvalRequestId, pendingApproval.id));
+
+      await tx.insert(workflowInstanceSteps).values({
+        tenantId,
+        approvalRequestId: pendingApproval.id,
+        stepNumber: (stepsCount ?? 0) + 1,
+        stepName: pendingApproval.currentStage || "MANAGER_REVIEW",
+        action: "REJECTED",
+        actorUserId: auth.userId,
+        comment: input.reason,
+        decidedAt: now,
+      });
+    }
 
     await tx.insert(notifications).values({
       tenantId,

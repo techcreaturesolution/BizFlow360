@@ -66,6 +66,7 @@ export const updateCompanySchema = z.object({
   numberingRules: numberingPreferencesSchema,
   modulePreferences: z.record(z.string(), z.unknown()).optional(),
   moduleSettings: z.record(z.string(), z.unknown()).optional(),
+  expenseApprovalThreshold: z.coerce.number().min(0).optional(),
 });
 
 export const orgQuerySchema = z.object({

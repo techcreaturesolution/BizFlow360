@@ -17,6 +17,7 @@ import { users } from "./users";
 export const EXPENSE_STATUSES = [
   "DRAFT",
   "SUBMITTED",
+  "PENDING_FINANCE",
   "APPROVED",
   "REJECTED",
   "PAID",

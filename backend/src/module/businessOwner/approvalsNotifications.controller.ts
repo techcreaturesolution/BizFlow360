@@ -14,6 +14,7 @@ import {
   decideApprovalRequest,
   getApprovalInbox,
   getNotificationPreferences,
+  getWorkflowInstanceHistory,
   listNotifications,
   listTenantAuditLogs,
   markAllNotificationsRead,
@@ -21,58 +22,47 @@ import {
   updateNotificationPreferences,
 } from "./approvalsNotifications.service";
 
-function requireTenantId(req: Parameters<RequestHandler>[0]): string {
-  const tenantId = req.auth?.tenantId;
-  if (!tenantId) {
+function requireAuthTenant(req: Parameters<RequestHandler>[0]) {
+  if (!req.auth || !req.auth.tenantId) {
     throw Errors.forbidden("Operation requires an active tenant workspace context.");
   }
-  return tenantId;
+  return req.auth;
+}
+
+function requireTenantId(req: Parameters<RequestHandler>[0]): string {
+  return requireAuthTenant(req).tenantId!;
 }
 
 function requireUserId(req: Parameters<RequestHandler>[0]): string {
-  const userId = req.auth?.userId;
-  if (!userId) {
-    throw Errors.unauthorized("Authentication required.");
-  }
-  return userId;
+  return requireAuthTenant(req).userId;
 }
 
 export const getApprovalInboxHandler: RequestHandler = async (req, res) => {
-  const tenantId = requireTenantId(req);
+  const auth = requireAuthTenant(req);
   const query = approvalInboxQuerySchema.parse(req.query);
-  const result = await getApprovalInbox(tenantId, query);
+  const result = await getApprovalInbox(auth, query);
   return sendSuccess(res, result);
 };
 
 export const approveRequestHandler: RequestHandler = async (req, res) => {
-  const tenantId = requireTenantId(req);
-  const actorUserId = requireUserId(req);
+  const auth = requireAuthTenant(req);
   const approvalId = req.params.id as string;
   const input = approveDecisionSchema.parse(req.body ?? {});
-  const result = await decideApprovalRequest(
-    tenantId,
-    actorUserId,
-    approvalId,
-    "APPROVED",
-    input,
-    req.requestId,
-  );
+  const result = await decideApprovalRequest(auth, approvalId, "APPROVED", input, req.requestId);
   return sendSuccess(res, result);
 };
 
 export const rejectRequestHandler: RequestHandler = async (req, res) => {
-  const tenantId = requireTenantId(req);
-  const actorUserId = requireUserId(req);
+  const auth = requireAuthTenant(req);
   const approvalId = req.params.id as string;
   const input = rejectDecisionSchema.parse(req.body ?? {});
-  const result = await decideApprovalRequest(
-    tenantId,
-    actorUserId,
-    approvalId,
-    "REJECTED",
-    input,
-    req.requestId,
-  );
+  const result = await decideApprovalRequest(auth, approvalId, "REJECTED", input, req.requestId);
+  return sendSuccess(res, result);
+};
+
+export const getWorkflowInstanceHistoryHandler: RequestHandler = async (req, res) => {
+  const auth = requireAuthTenant(req);
+  const result = await getWorkflowInstanceHistory(auth, req.params.id as string);
   return sendSuccess(res, result);
 };
 

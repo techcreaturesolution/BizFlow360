@@ -56,6 +56,7 @@ import {
   approveRequestHandler,
   getApprovalInboxHandler,
   getNotificationPreferencesHandler,
+  getWorkflowInstanceHistoryHandler,
   listNotificationsHandler,
   listTenantAuditLogsHandler,
   markAllNotificationsReadHandler,
@@ -73,7 +74,7 @@ router.get(
   "/users",
   jwtAuthGuard,
   entitlementGuard("AUTH"),
-  permissionsGuard("AUTH.USERS.VIEW"),
+  permissionsGuard("AUTH.USERS.VIEW", "AUTH.USERS.VIEW_TEAM"),
   getTeamMembersHandler,
 );
 
@@ -486,6 +487,14 @@ router.put(
   entitlementGuard("NOTIFICATIONS"),
   permissionsGuard("NOTIFICATIONS.ALERTS.VIEW"),
   updateNotificationPreferencesHandler,
+);
+
+router.get(
+  "/workflows/instances/:id",
+  jwtAuthGuard,
+  entitlementGuard("APPROVALS"),
+  permissionsGuard("APPROVALS.INBOX.VIEW"),
+  getWorkflowInstanceHistoryHandler,
 );
 
 // ==========================================

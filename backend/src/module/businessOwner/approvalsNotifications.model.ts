@@ -9,6 +9,7 @@ import {
 export const approvalInboxQuerySchema = z.object({
   status: z.enum(APPROVAL_STATUSES).optional(),
   entityType: z.enum(APPROVAL_ENTITY_TYPES).optional(),
+  module: z.enum(APPROVAL_ENTITY_TYPES).optional(),
   branchId: z.string().uuid().optional(),
   departmentId: z.string().uuid().optional(),
   page: z.coerce.number().int().min(1).default(1),

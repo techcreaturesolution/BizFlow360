@@ -1,9 +1,18 @@
 // Tasks schema: Tasks and Task Comments.
-import { index, pgTable, text, timestamp, uuid, varchar } from "drizzle-orm/pg-core";
+import { index, jsonb, pgTable, text, timestamp, uuid, varchar } from "drizzle-orm/pg-core";
 import { tenants } from "./tenants";
 import { users } from "./users";
 
-export const TASK_STATUSES = ["TODO", "IN_PROGRESS", "IN_REVIEW", "DONE", "CANCELLED"] as const;
+export const TASK_STATUSES = [
+  "TODO",
+  "IN_PROGRESS",
+  "IN_REVIEW",
+  "REVIEW",
+  "DONE",
+  "COMPLETED",
+  "BLOCKED",
+  "CANCELLED",
+] as const;
 export type TaskStatus = (typeof TASK_STATUSES)[number];
 
 export const TASK_PRIORITIES = ["LOW", "MEDIUM", "HIGH", "URGENT"] as const;
@@ -26,6 +35,7 @@ export const tasks = pgTable(
     completedAt: timestamp("completed_at", { withTimezone: true }),
     branchId: uuid("branch_id"),
     departmentId: uuid("department_id"),
+    projectId: uuid("project_id"),
     relatedEntityType: varchar("related_entity_type", { length: 50 }),
     relatedEntityId: uuid("related_entity_id"),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
@@ -52,6 +62,7 @@ export const taskComments = pgTable(
       .notNull()
       .references(() => users.id, { onDelete: "cascade" }),
     comment: text("comment").notNull(),
+    mentions: jsonb("mentions").$type<string[]>().default([]),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   },
   (table) => [index("task_comments_task_id_idx").on(table.taskId)],

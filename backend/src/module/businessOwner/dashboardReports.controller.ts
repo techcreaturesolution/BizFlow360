@@ -33,10 +33,17 @@ function requireUserId(req: Parameters<RequestHandler>[0]): string {
   return userId;
 }
 
+function requireAuthTenant(req: Parameters<RequestHandler>[0]) {
+  if (!req.auth || !req.auth.tenantId) {
+    throw Errors.forbidden("Operation requires an active tenant workspace context.");
+  }
+  return req.auth;
+}
+
 export const getDashboardSummaryHandler: RequestHandler = async (req, res) => {
-  const tenantId = requireTenantId(req);
+  const auth = requireAuthTenant(req);
   const query = dashboardSummaryQuerySchema.parse(req.query);
-  const result = await getDashboardSummary(tenantId, query);
+  const result = await getDashboardSummary(auth, query);
   return sendSuccess(res, result);
 };
 
@@ -44,9 +51,9 @@ export function createModuleAnalyticsHandler(
   moduleType: "sales" | "finance" | "hr" | "projects",
 ): RequestHandler {
   return async (req, res) => {
-    const tenantId = requireTenantId(req);
+    const auth = requireAuthTenant(req);
     const query = analyticsQuerySchema.parse(req.query);
-    const result = await getModuleAnalytics(tenantId, moduleType, query);
+    const result = await getModuleAnalytics(auth, moduleType, query);
     return sendSuccess(res, result);
   };
 }

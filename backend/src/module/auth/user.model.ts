@@ -159,6 +159,9 @@ export interface CurrentUserProfile {
   tenant: TenantInfo | null;
   membership: TenantMembershipInfo | null;
   effectivePermissions: string[];
+  enabledModules: string[];
+  managedDepartmentIds: string[];
+  managedTeamIds: string[];
 }
 
 export interface AuthResponse {

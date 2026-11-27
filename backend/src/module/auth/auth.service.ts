@@ -3,11 +3,14 @@ import { and, eq, gt, inArray, isNull, or, sql } from "drizzle-orm";
 import { randomBytes } from "crypto";
 import { db, type Db } from "../../db";
 import {
+  departments,
   passwordResets,
   permissions,
   rolePermissions,
   roles,
   sessions,
+  teams,
+  tenantEntitlements,
   tenantMemberships,
   tenants,
   usageMetrics,
@@ -607,17 +610,48 @@ export async function getMe(userId: string): Promise<CurrentUserProfile> {
   let tenantInfo: TenantInfo | null = null;
   let membershipInfo: TenantMembershipInfo | null = null;
   const effectivePermissions = new Set<string>();
+  let enabledModules: string[] = [];
+  let managedDepartmentIds: string[] = [];
+  let managedTeamIds: string[] = [];
 
   if (user.tenantId) {
-    const [tenantRow] = await db
-      .select()
-      .from(tenants)
-      .where(eq(tenants.id, user.tenantId))
-      .limit(1);
+    const [tenantRow, entRows, deptRows, teamRows] = await Promise.all([
+      db.select().from(tenants).where(eq(tenants.id, user.tenantId)).limit(1),
+      db
+        .select({ moduleCode: tenantEntitlements.moduleCode })
+        .from(tenantEntitlements)
+        .where(
+          and(
+            eq(tenantEntitlements.tenantId, user.tenantId),
+            eq(tenantEntitlements.isEnabled, true),
+          ),
+        ),
+      db
+        .select({ id: departments.id })
+        .from(departments)
+        .where(
+          and(
+            eq(departments.tenantId, user.tenantId),
+            eq(departments.managerUserId, user.id),
+          ),
+        ),
+      db
+        .select({ id: teams.id })
+        .from(teams)
+        .where(
+          and(
+            eq(teams.tenantId, user.tenantId),
+            eq(teams.managerUserId, user.id),
+          ),
+        ),
+    ]);
 
-    if (tenantRow) {
-      tenantInfo = toTenantInfo(tenantRow);
+    if (tenantRow[0]) {
+      tenantInfo = toTenantInfo(tenantRow[0]);
     }
+    enabledModules = entRows.map((e) => e.moduleCode);
+    managedDepartmentIds = deptRows.map((d) => d.id);
+    managedTeamIds = teamRows.map((t) => t.id);
 
     const [membership] = await db
       .select()
@@ -640,6 +674,9 @@ export async function getMe(userId: string): Promise<CurrentUserProfile> {
         departmentId: membership.departmentId,
         joinedAt: membership.joinedAt,
       };
+      if (membership.departmentId && !managedDepartmentIds.includes(membership.departmentId)) {
+        managedDepartmentIds.push(membership.departmentId);
+      }
 
       const effectiveRoles = Array.from(
         new Set([...user.roles, ...(membership.roleName ? [membership.roleName] : [])]),
@@ -682,5 +719,8 @@ export async function getMe(userId: string): Promise<CurrentUserProfile> {
     tenant: tenantInfo,
     membership: membershipInfo,
     effectivePermissions: Array.from(effectivePermissions),
+    enabledModules,
+    managedDepartmentIds,
+    managedTeamIds,
   };
 }

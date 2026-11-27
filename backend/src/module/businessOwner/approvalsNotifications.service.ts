@@ -1,5 +1,5 @@
-// Approvals & Notifications Service: Approval Inbox, Approve/Reject with Audit, In-App Alerts & Preferences.
-import { and, desc, eq, gte, ilike, lte, sql } from "drizzle-orm";
+// Approvals & Notifications Service: Approval Inbox, Approve/Reject with Audit & Workflow History, In-App Alerts & Preferences.
+import { and, asc, desc, eq, gte, ilike, inArray, lte, or, sql } from "drizzle-orm";
 import { db } from "../../db";
 import {
   approvalRequests,
@@ -8,9 +8,11 @@ import {
   notificationPreferences,
   notifications,
   users,
+  workflowInstanceSteps,
 } from "../../db/schema";
 import { writeAudit } from "../../lib/audit";
 import { Errors } from "../../lib/errors";
+import { resolveRecordScope, type AuthContext } from "../../middlewares/guards";
 import type {
   ApprovalDecisionInput,
   ApprovalInboxQuery,
@@ -22,19 +24,47 @@ import type {
 // ==========================================
 // 1. APPROVAL INBOX (GET /approvals/inbox)
 // ==========================================
-export async function getApprovalInbox(tenantId: string, query: ApprovalInboxQuery) {
+export async function getApprovalInbox(auth: AuthContext, query: ApprovalInboxQuery) {
+  const tenantId = auth.tenantId!;
+  const scopeCtx = await resolveRecordScope(auth, "APPROVALS.INBOX.VIEW_ALL", "APPROVALS.INBOX.VIEW");
+
   const conditions = [eq(approvalRequests.tenantId, tenantId)];
+
+  if (scopeCtx.scope === "TEAM_DEPARTMENT") {
+    const scopeParts = [
+      eq(approvalRequests.approverUserId, auth.userId),
+      inArray(approvalRequests.requestedBy, scopeCtx.teamUserIds),
+    ];
+    if (scopeCtx.departmentIds.length > 0) {
+      scopeParts.push(inArray(approvalRequests.departmentId, scopeCtx.departmentIds));
+    }
+    conditions.push(or(...scopeParts)!);
+  } else if (scopeCtx.scope === "OWN_ONLY") {
+    conditions.push(
+      or(
+        eq(approvalRequests.approverUserId, auth.userId),
+        eq(approvalRequests.requestedBy, auth.userId),
+      )!,
+    );
+  }
 
   if (query.status) {
     conditions.push(eq(approvalRequests.status, query.status));
   }
-  if (query.entityType) {
-    conditions.push(eq(approvalRequests.entityType, query.entityType));
+  const effectiveEntityType = query.entityType ?? query.module;
+  if (effectiveEntityType) {
+    conditions.push(eq(approvalRequests.entityType, effectiveEntityType));
   }
   if (query.branchId) {
     conditions.push(eq(approvalRequests.branchId, query.branchId));
   }
   if (query.departmentId) {
+    if (
+      scopeCtx.scope === "TEAM_DEPARTMENT" &&
+      !scopeCtx.departmentIds.includes(query.departmentId)
+    ) {
+      throw Errors.forbidden("Cannot view approval requests for another department.");
+    }
     conditions.push(eq(approvalRequests.departmentId, query.departmentId));
   }
 
@@ -75,6 +105,7 @@ export async function getApprovalInbox(tenantId: string, query: ApprovalInboxQue
   const total = totalRow?.count ?? 0;
 
   return {
+    scope: scopeCtx.scope,
     approvals: rows.map((r) => ({
       id: r.approval.id,
       entityType: r.approval.entityType,
@@ -84,6 +115,7 @@ export async function getApprovalInbox(tenantId: string, query: ApprovalInboxQue
       amount: r.approval.amount !== null ? Number(r.approval.amount) : null,
       currency: r.approval.currency.trim(),
       status: r.approval.status,
+      currentStage: r.approval.currentStage,
       requestedBy: {
         id: r.approval.requestedBy,
         fullName: r.requesterName ?? null,
@@ -111,13 +143,16 @@ export async function getApprovalInbox(tenantId: string, query: ApprovalInboxQue
 // 2. APPROVE / REJECT (POST /approvals/:id/approve | /reject)
 // ==========================================
 export async function decideApprovalRequest(
-  tenantId: string,
-  actorUserId: string,
+  auth: AuthContext,
   approvalId: string,
   decision: "APPROVED" | "REJECTED",
   input: ApprovalDecisionInput,
   requestId?: string,
 ) {
+  const tenantId = auth.tenantId!;
+  const actorUserId = auth.userId;
+  const scopeCtx = await resolveRecordScope(auth, "APPROVALS.INBOX.VIEW_ALL", "APPROVALS.INBOX.VIEW");
+
   const [existing] = await db
     .select()
     .from(approvalRequests)
@@ -133,6 +168,19 @@ export async function decideApprovalRequest(
     throw Errors.notFound("Approval request not found in your company.");
   }
 
+  // Enforce Manager Department / Team record scope
+  if (scopeCtx.scope === "TEAM_DEPARTMENT") {
+    const inScope =
+      existing.approverUserId === actorUserId ||
+      scopeCtx.teamUserIds.includes(existing.requestedBy) ||
+      (existing.departmentId ? scopeCtx.departmentIds.includes(existing.departmentId) : false);
+    if (!inScope) {
+      throw Errors.forbidden("You do not have access to decide approvals outside your department/team.");
+    }
+  } else if (scopeCtx.scope === "OWN_ONLY" && existing.approverUserId !== actorUserId) {
+    throw Errors.forbidden("You are not authorized to approve or reject this request.");
+  }
+
   if (existing.status !== "PENDING") {
     throw Errors.conflict(`Approval request is already ${existing.status}.`);
   }
@@ -145,6 +193,7 @@ export async function decideApprovalRequest(
       .update(approvalRequests)
       .set({
         status: decision,
+        currentStage: "COMPLETED",
         decisionComment: commentText,
         decidedBy: actorUserId,
         decidedAt: now,
@@ -157,6 +206,22 @@ export async function decideApprovalRequest(
         ),
       )
       .returning();
+
+    const [{ count: existingStepsCount }] = await tx
+      .select({ count: sql<number>`count(*)::int` })
+      .from(workflowInstanceSteps)
+      .where(eq(workflowInstanceSteps.approvalRequestId, approvalId));
+
+    await tx.insert(workflowInstanceSteps).values({
+      tenantId,
+      approvalRequestId: approvalId,
+      stepNumber: (existingStepsCount ?? 0) + 1,
+      stepName: existing.currentStage || "MANAGER_REVIEW",
+      action: decision,
+      actorUserId,
+      comment: commentText,
+      decidedAt: now,
+    });
 
     // Notify requester via in-app notification
     await tx.insert(notifications).values({
@@ -175,9 +240,10 @@ export async function decideApprovalRequest(
       action: decision === "APPROVED" ? "APPROVAL.APPROVE" : "APPROVAL.REJECT",
       entityType: "approval_request",
       entityId: approvalId,
-      beforeData: { status: existing.status },
+      beforeData: { status: existing.status, currentStage: existing.currentStage },
       afterData: {
         status: decision,
+        currentStage: "COMPLETED",
         decidedBy: actorUserId,
         decidedAt: now.toISOString(),
         comment: commentText,
@@ -195,11 +261,97 @@ export async function decideApprovalRequest(
       entityType: updated.entityType,
       entityId: updated.entityId,
       status: updated.status,
+      currentStage: updated.currentStage,
       decisionComment: updated.decisionComment,
       decidedBy: updated.decidedBy,
       decidedAt: updated.decidedAt,
     },
     message: `Request has been ${decision.toLowerCase()} successfully.`,
+  };
+}
+
+// Workflow Instance History (GET /workflows/instances/:id)
+export async function getWorkflowInstanceHistory(auth: AuthContext, instanceId: string) {
+  const tenantId = auth.tenantId!;
+  const scopeCtx = await resolveRecordScope(auth, "APPROVALS.INBOX.VIEW_ALL", "APPROVALS.INBOX.VIEW");
+
+  const [instance] = await db
+    .select({
+      approval: approvalRequests,
+      requesterName: users.fullName,
+      requesterEmail: users.email,
+    })
+    .from(approvalRequests)
+    .leftJoin(users, eq(users.id, approvalRequests.requestedBy))
+    .where(and(eq(approvalRequests.id, instanceId), eq(approvalRequests.tenantId, tenantId)))
+    .limit(1);
+
+  if (!instance) {
+    throw Errors.notFound("Workflow / approval instance not found.");
+  }
+
+  if (scopeCtx.scope === "TEAM_DEPARTMENT") {
+    const inScope =
+      instance.approval.approverUserId === auth.userId ||
+      scopeCtx.teamUserIds.includes(instance.approval.requestedBy) ||
+      (instance.approval.departmentId
+        ? scopeCtx.departmentIds.includes(instance.approval.departmentId)
+        : false);
+    if (!inScope) {
+      throw Errors.forbidden("You do not have access to this workflow instance.");
+    }
+  } else if (scopeCtx.scope === "OWN_ONLY" && instance.approval.requestedBy !== auth.userId) {
+    throw Errors.forbidden("You do not have access to this workflow instance.");
+  }
+
+  const steps = await db
+    .select({
+      step: workflowInstanceSteps,
+      actorName: users.fullName,
+      actorEmail: users.email,
+    })
+    .from(workflowInstanceSteps)
+    .leftJoin(users, eq(users.id, workflowInstanceSteps.actorUserId))
+    .where(
+      and(
+        eq(workflowInstanceSteps.approvalRequestId, instanceId),
+        eq(workflowInstanceSteps.tenantId, tenantId),
+      ),
+    )
+    .orderBy(asc(workflowInstanceSteps.stepNumber), asc(workflowInstanceSteps.createdAt));
+
+  return {
+    instance: {
+      id: instance.approval.id,
+      entityType: instance.approval.entityType,
+      entityId: instance.approval.entityId,
+      entityNumber: instance.approval.entityNumber,
+      title: instance.approval.title,
+      amount: instance.approval.amount !== null ? Number(instance.approval.amount) : null,
+      currency: instance.approval.currency.trim(),
+      status: instance.approval.status,
+      currentStage: instance.approval.currentStage,
+      requestedBy: {
+        id: instance.approval.requestedBy,
+        fullName: instance.requesterName ?? null,
+        email: instance.requesterEmail ?? null,
+      },
+      createdAt: instance.approval.createdAt,
+    },
+    steps: steps.map((s) => ({
+      id: s.step.id,
+      stepNumber: s.step.stepNumber,
+      stepName: s.step.stepName,
+      action: s.step.action,
+      comment: s.step.comment,
+      actor: {
+        id: s.step.actorUserId,
+        fullName: s.actorName ?? null,
+        email: s.actorEmail ?? null,
+      },
+      decidedAt: s.step.decidedAt,
+      createdAt: s.step.createdAt,
+    })),
   };
 }
 

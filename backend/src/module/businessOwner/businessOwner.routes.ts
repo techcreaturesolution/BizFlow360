@@ -15,7 +15,9 @@ import {
   getRolesHandler,
   getTeamMembersHandler,
   inviteMemberHandler,
+  listPendingInvitationsHandler,
   listPermissionsCatalogHandler,
+  revokeInvitationHandler,
   updateRoleHandler,
   updateUserStatusHandler,
 } from "./businessOwner.controller";
@@ -55,6 +57,7 @@ import {
   getApprovalInboxHandler,
   getNotificationPreferencesHandler,
   listNotificationsHandler,
+  listTenantAuditLogsHandler,
   markAllNotificationsReadHandler,
   markNotificationReadHandler,
   rejectRequestHandler,
@@ -74,6 +77,14 @@ router.get(
   getTeamMembersHandler,
 );
 
+router.get(
+  "/users/invitations",
+  jwtAuthGuard,
+  entitlementGuard("AUTH"),
+  permissionsGuard("AUTH.USERS.VIEW", "AUTH.USERS.INVITE"),
+  listPendingInvitationsHandler,
+);
+
 router.post(
   "/users/invitations",
   jwtAuthGuard,
@@ -81,6 +92,14 @@ router.post(
   permissionsGuard("AUTH.USERS.INVITE"),
   idempotencyGuard,
   inviteMemberHandler,
+);
+
+router.delete(
+  "/users/invitations/:id",
+  jwtAuthGuard,
+  entitlementGuard("AUTH"),
+  permissionsGuard("AUTH.USERS.INVITE", "AUTH.USERS.MANAGE"),
+  revokeInvitationHandler,
 );
 
 router.patch(
@@ -467,6 +486,17 @@ router.put(
   entitlementGuard("NOTIFICATIONS"),
   permissionsGuard("NOTIFICATIONS.ALERTS.VIEW"),
   updateNotificationPreferencesHandler,
+);
+
+// ==========================================
+// F. Company Audit Logs (Read-Only)
+// ==========================================
+router.get(
+  "/audit-logs",
+  jwtAuthGuard,
+  entitlementGuard("AUDIT"),
+  permissionsGuard("AUDIT.LOGS.VIEW"),
+  listTenantAuditLogsHandler,
 );
 
 export default router;

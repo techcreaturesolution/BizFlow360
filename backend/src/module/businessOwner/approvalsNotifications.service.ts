@@ -1,8 +1,9 @@
 // Approvals & Notifications Service: Approval Inbox, Approve/Reject with Audit, In-App Alerts & Preferences.
-import { and, desc, eq, sql } from "drizzle-orm";
+import { and, desc, eq, gte, ilike, lte, sql } from "drizzle-orm";
 import { db } from "../../db";
 import {
   approvalRequests,
+  auditLogs,
   DEFAULT_NOTIFICATION_PREFERENCES,
   notificationPreferences,
   notifications,
@@ -14,6 +15,7 @@ import type {
   ApprovalDecisionInput,
   ApprovalInboxQuery,
   NotificationsQuery,
+  TenantAuditLogsQuery,
   UpdateNotificationPreferencesInput,
 } from "./approvalsNotifications.model";
 
@@ -214,7 +216,9 @@ export async function listNotifications(
     eq(notifications.userId, userId),
   ];
 
-  if (query.isRead !== undefined) {
+  if (query.unread_only === true) {
+    conditions.push(eq(notifications.isRead, false));
+  } else if (query.isRead !== undefined) {
     conditions.push(eq(notifications.isRead, query.isRead));
   }
   if (query.category) {
@@ -428,5 +432,76 @@ export async function updateNotificationPreferences(
     preferences: saved.preferences,
     updatedAt: saved.updatedAt,
     message: "Notification preferences updated successfully.",
+  };
+}
+
+// ==========================================
+// 5. TENANT AUDIT LOGS (GET /audit-logs - Read-only)
+// ==========================================
+export async function listTenantAuditLogs(tenantId: string, query: TenantAuditLogsQuery) {
+  const conditions = [eq(auditLogs.tenantId, tenantId)];
+
+  const actorId = query.actor_user_id ?? query.actorUserId;
+  if (actorId) {
+    conditions.push(eq(auditLogs.actorUserId, actorId));
+  }
+  if (query.action) {
+    conditions.push(ilike(auditLogs.action, `%${query.action}%`));
+  }
+  const entityType = query.entity_type ?? query.entityType;
+  if (entityType) {
+    conditions.push(eq(auditLogs.entityType, entityType));
+  }
+  if (query.from) {
+    const d = new Date(query.from);
+    if (!Number.isNaN(d.getTime())) conditions.push(gte(auditLogs.createdAt, d));
+  }
+  if (query.to) {
+    const d = new Date(query.to);
+    if (!Number.isNaN(d.getTime())) conditions.push(lte(auditLogs.createdAt, d));
+  }
+
+  const offset = (query.page - 1) * query.limit;
+
+  const [[totalRow], rows] = await Promise.all([
+    db.select({ count: sql<number>`count(*)::int` }).from(auditLogs).where(and(...conditions)),
+    db
+      .select({
+        log: auditLogs,
+        actorName: users.fullName,
+        actorEmail: users.email,
+      })
+      .from(auditLogs)
+      .leftJoin(users, eq(users.id, auditLogs.actorUserId))
+      .where(and(...conditions))
+      .orderBy(desc(auditLogs.createdAt))
+      .limit(query.limit)
+      .offset(offset),
+  ]);
+
+  const total = totalRow?.count ?? 0;
+
+  return {
+    auditLogs: rows.map((r) => ({
+      id: r.log.id,
+      tenant_id: r.log.tenantId,
+      actor_user_id: r.log.actorUserId,
+      actor_name: r.actorName ?? null,
+      actor_email: r.actorEmail ?? null,
+      action: r.log.action,
+      entity_type: r.log.entityType,
+      entity_id: r.log.entityId,
+      before_data: r.log.beforeData,
+      after_data: r.log.afterData,
+      reason: r.log.reason,
+      request_id: r.log.requestId,
+      created_at: r.log.createdAt,
+    })),
+    pagination: {
+      page: query.page,
+      limit: query.limit,
+      total,
+      totalPages: Math.ceil(total / query.limit),
+    },
   };
 }

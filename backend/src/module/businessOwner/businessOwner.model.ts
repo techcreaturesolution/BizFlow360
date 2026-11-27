@@ -10,8 +10,12 @@ const emailField = z
 
 export const teamMembersQuerySchema = z.object({
   status: z.enum(["ACTIVE", "INACTIVE", "INVITED", "SUSPENDED"]).optional(),
+  roleId: z.string().uuid().optional(),
+  role_id: z.string().uuid().optional(),
   branch: z.string().trim().optional(),
+  branch_id: z.string().trim().optional(),
   department: z.string().trim().optional(),
+  department_id: z.string().trim().optional(),
   search: z.string().trim().optional(),
   page: z.coerce.number().int().min(1).default(1),
   limit: z.coerce.number().int().min(1).max(100).default(20),
@@ -25,12 +29,14 @@ export const inviteMemberSchema = z.object({
     .min(2, "Full Name kam se kam 2 characters ka hona chahiye")
     .max(100, "Full Name bahut lamba hai"),
   roleId: z.string().uuid("Valid Role ID (UUID) dalein").optional(),
+  roleIds: z.array(z.string().uuid("Valid Role ID (UUID) dalein")).optional(),
   branchId: z.string().trim().max(100).optional(),
   departmentId: z.string().trim().max(100).optional(),
 });
 
 export const updateUserStatusSchema = z.object({
   status: z.enum(["ACTIVE", "INACTIVE"]),
+  reason: z.string().trim().max(500).optional(),
 });
 
 export const createRoleSchema = z.object({
@@ -41,6 +47,7 @@ export const createRoleSchema = z.object({
     .max(50, "Role name bahut lamba hai")
     .regex(/^[A-Za-z0-9_ -]+$/, "Role name me valid characters dalein"),
   description: z.string().trim().max(250).optional(),
+  permissionIds: z.array(z.string().min(1)).optional(),
 });
 
 export const assignRolePermissionsSchema = z.object({

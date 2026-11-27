@@ -1,5 +1,5 @@
 // Auth service: tenant + user register, login, session rotation, logout, password reset aur audit log.
-import { and, eq, gt, inArray, isNull, or } from "drizzle-orm";
+import { and, eq, gt, inArray, isNull, or, sql } from "drizzle-orm";
 import { randomBytes } from "crypto";
 import { db, type Db } from "../../db";
 import {
@@ -10,6 +10,8 @@ import {
   sessions,
   tenantMemberships,
   tenants,
+  usageMetrics,
+  userInvitations,
   users,
 } from "../../db/schema";
 import { initializeTenantDefaults } from "../../db/tenantDefaults";
@@ -23,6 +25,7 @@ import {
 } from "../../lib/jwt";
 import { hashPassword, verifyPassword } from "../../lib/Password";
 import type {
+  AcceptInvitationInput,
   AuthResponse,
   CurrentUserProfile,
   ForgotPasswordInput,
@@ -422,6 +425,171 @@ export async function resetPassword(input: ResetPasswordInput, requestId?: strin
   });
 
   return { success: true, message: "Password has been successfully updated. Please login with your new password." };
+}
+
+// Accept Team Member Invitation (POST /auth/invitations/accept)
+export async function acceptInvitation(
+  input: AcceptInvitationInput,
+  requestId?: string,
+): Promise<AuthResponse> {
+  const tokenHash = hashToken(input.token);
+
+  const [invitation] = await db
+    .select()
+    .from(userInvitations)
+    .where(
+      and(
+        eq(userInvitations.tokenHash, tokenHash),
+        eq(userInvitations.status, "PENDING"),
+        gt(userInvitations.expiresAt, new Date()),
+      ),
+    )
+    .limit(1);
+
+  if (!invitation) {
+    throw Errors.badRequest("Invalid, revoked, or expired invitation token.");
+  }
+
+  const [tenantRow] = await db
+    .select()
+    .from(tenants)
+    .where(eq(tenants.id, invitation.tenantId))
+    .limit(1);
+
+  if (!tenantRow || BLOCKED_TENANT_STATUSES.has(tenantRow.status)) {
+    throw Errors.forbidden("Tenant workspace is unavailable.");
+  }
+
+  const roleIdsList = Array.from(
+    new Set([
+      ...(invitation.roleIds ?? []),
+      ...(invitation.roleId ? [invitation.roleId] : []),
+    ]),
+  );
+
+  let assignedRoleNames = ["MEMBER"];
+  if (roleIdsList.length > 0) {
+    const resolvedRoles = await db
+      .select({ name: roles.name })
+      .from(roles)
+      .where(inArray(roles.id, roleIdsList));
+
+    if (resolvedRoles.length > 0) {
+      assignedRoleNames = resolvedRoles.map((r) => r.name);
+    }
+  }
+
+  const primaryRoleName = assignedRoleNames[0] ?? "MEMBER";
+  const passwordHash = await hashPassword(input.password);
+  const fullName = input.fullName ?? invitation.fullName;
+
+  return db.transaction(async (tx) => {
+    const [existingUser] = await tx
+      .select()
+      .from(users)
+      .where(eq(users.email, invitation.email))
+      .limit(1);
+
+    let userRecord;
+    if (existingUser) {
+      const [updatedUser] = await tx
+        .update(users)
+        .set({
+          tenantId: invitation.tenantId,
+          fullName,
+          passwordHash,
+          roles: assignedRoleNames,
+          isActive: true,
+          updatedAt: new Date(),
+        })
+        .where(eq(users.id, existingUser.id))
+        .returning();
+      userRecord = updatedUser;
+    } else {
+      const [createdUser] = await tx
+        .insert(users)
+        .values({
+          tenantId: invitation.tenantId,
+          fullName,
+          email: invitation.email,
+          passwordHash,
+          roles: assignedRoleNames,
+          isActive: true,
+        })
+        .returning();
+      userRecord = createdUser;
+    }
+
+    const [existingMembership] = await tx
+      .select()
+      .from(tenantMemberships)
+      .where(
+        and(
+          eq(tenantMemberships.tenantId, invitation.tenantId),
+          eq(tenantMemberships.userId, userRecord.id),
+        ),
+      )
+      .limit(1);
+
+    if (existingMembership) {
+      await tx
+        .update(tenantMemberships)
+        .set({
+          roleId: invitation.roleId,
+          roleName: primaryRoleName,
+          status: "ACTIVE",
+          branchId: invitation.branchId,
+          departmentId: invitation.departmentId,
+          joinedAt: new Date(),
+          updatedAt: new Date(),
+        })
+        .where(eq(tenantMemberships.id, existingMembership.id));
+    } else {
+      await tx.insert(tenantMemberships).values({
+        tenantId: invitation.tenantId,
+        userId: userRecord.id,
+        roleId: invitation.roleId,
+        roleName: primaryRoleName,
+        status: "ACTIVE",
+        branchId: invitation.branchId,
+        departmentId: invitation.departmentId,
+        invitedBy: invitation.invitedBy,
+        joinedAt: new Date(),
+      });
+
+      // Increment used seats metric
+      await tx
+        .update(usageMetrics)
+        .set({
+          seatsUsed: sql`${usageMetrics.seatsUsed} + 1`,
+          updatedAt: new Date(),
+        })
+        .where(eq(usageMetrics.tenantId, invitation.tenantId));
+    }
+
+    await tx
+      .update(userInvitations)
+      .set({ status: "ACCEPTED", updatedAt: new Date() })
+      .where(eq(userInvitations.id, invitation.id));
+
+    await writeAudit(tx, {
+      tenantId: invitation.tenantId,
+      actorUserId: userRecord.id,
+      action: "AUTH.INVITATION.ACCEPT",
+      entityType: "user_invitation",
+      entityId: invitation.id,
+      afterData: { email: userRecord.email, roles: assignedRoleNames },
+      requestId,
+    });
+
+    return issueSessionAndTokens(
+      tx,
+      toLoginUser(userRecord),
+      toTenantInfo(tenantRow),
+      "AUTH.LOGIN",
+      requestId,
+    );
+  });
 }
 
 // Current User Profile with Membership & Permissions

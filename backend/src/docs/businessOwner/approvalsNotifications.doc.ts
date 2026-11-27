@@ -164,11 +164,35 @@ export const approvalsNotificationsDoc = {
         },
       },
     },
+    "/api/v1/audit-logs": {
+      get: {
+        tags: ["[Business Owner] Approvals & Notifications"],
+        summary: "Search & filter company audit logs (Read-Only)",
+        description:
+          "Returns tenant-scoped audit trail events (before_data, after_data, reason, request_id, created_at) for user invites, role updates, approvals, and settings changes.",
+        security: [{ bearerAuth: [] }],
+        parameters: [
+          { name: "actor_user_id", in: "query", schema: { type: "string", format: "uuid" } },
+          { name: "action", in: "query", schema: { type: "string" }, description: "Partial or exact action code (e.g. AUTH.USERS.INVITE)" },
+          { name: "entity_type", in: "query", schema: { type: "string" } },
+          { name: "from", in: "query", schema: { type: "string", format: "date-time" } },
+          { name: "to", in: "query", schema: { type: "string", format: "date-time" } },
+          { name: "page", in: "query", schema: { type: "integer", default: 1 } },
+          { name: "limit", in: "query", schema: { type: "integer", default: 20 } },
+        ],
+        responses: {
+          "200": { description: "Paginated tenant audit logs" },
+          "403": { description: "Forbidden" },
+        },
+      },
+    },
   },
   schemas: {
     NotificationPreferencesInput: {
       type: "object",
       properties: {
+        emailEnabled: { type: "boolean", example: true },
+        inAppEnabled: { type: "boolean", example: true },
         emailApprovals: { type: "boolean", example: true },
         emailBilling: { type: "boolean", example: true },
         emailTeamUpdates: { type: "boolean", example: true },

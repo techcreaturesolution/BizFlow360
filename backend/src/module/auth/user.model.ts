@@ -51,6 +51,17 @@ export const resetPasswordSchema = z.object({
   newPassword: strongPasswordField,
 });
 
+export const acceptInvitationSchema = z.object({
+  token: z.string().min(1, "Invitation token is required"),
+  password: strongPasswordField,
+  fullName: z
+    .string()
+    .trim()
+    .min(2, "Full Name kam se kam 2 characters ka hona chahiye")
+    .max(100)
+    .optional(),
+});
+
 export const registerSchema = z
   .object({
     fullName: z
@@ -111,6 +122,7 @@ export type LogoutInput = z.infer<typeof logoutSchema>;
 export type RefreshInput = z.infer<typeof refreshSchema>;
 export type ForgotPasswordInput = z.infer<typeof forgotPasswordSchema>;
 export type ResetPasswordInput = z.infer<typeof resetPasswordSchema>;
+export type AcceptInvitationInput = z.infer<typeof acceptInvitationSchema>;
 export type RegisterInput = z.infer<typeof registerSchema>;
 
 export interface TenantInfo {

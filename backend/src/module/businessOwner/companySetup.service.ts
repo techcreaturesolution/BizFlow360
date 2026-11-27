@@ -1,11 +1,13 @@
 // Organization & Company Setup Service: Company Profile, Branches, Departments, Teams.
-import { and, asc, eq, ilike, inArray, ne, or } from "drizzle-orm";
+import { and, asc, eq, ilike, inArray, ne, or, sql } from "drizzle-orm";
 import { db } from "../../db";
 import {
   branches,
   departments,
+  MODULE_CODES,
   teamMembers,
   teams,
+  tenantEntitlements,
   tenantMemberships,
   tenants,
   users,
@@ -62,12 +64,14 @@ export async function getCompanyProfile(tenantId: string) {
     legalName: company.legalName,
     slug: company.slug,
     logoUrl: company.logoUrl,
+    logoDocumentId: company.logoDocumentId,
     address: company.address,
     taxId: company.taxId,
     locale: company.locale,
     defaultCurrency: company.defaultCurrency.trim(),
     timezone: company.timezone,
     financialYear: company.financialYear,
+    dateFormat: company.dateFormat,
     numberingPreferences: company.numberingPreferences,
     modulePreferences: company.modulePreferences,
     status: company.status,
@@ -92,6 +96,31 @@ export async function updateCompanyProfile(
     throw Errors.notFound("Company profile not found.");
   }
 
+  const incomingNumbering = input.numberingPreferences ?? input.numberingRules;
+  const incomingModules = input.modulePreferences ?? input.moduleSettings;
+
+  // Enforce: Company Admin/Owner can only enable modules that are enabled in their active subscription plan
+  if (incomingModules) {
+    const planEntitlements = await db
+      .select({ moduleCode: tenantEntitlements.moduleCode, isEnabled: tenantEntitlements.isEnabled })
+      .from(tenantEntitlements)
+      .where(eq(tenantEntitlements.tenantId, tenantId));
+
+    const entitlementMap = new Map(planEntitlements.map((e) => [e.moduleCode, e.isEnabled]));
+    const moduleCodeSet = new Set<string>(MODULE_CODES);
+
+    for (const [key, val] of Object.entries(incomingModules)) {
+      const upperKey = key.toUpperCase();
+      if (moduleCodeSet.has(upperKey) && val === true) {
+        if (!entitlementMap.get(upperKey)) {
+          throw Errors.forbidden(
+            `Module '${upperKey}' cannot be enabled because it is not included in your active subscription plan.`,
+          );
+        }
+      }
+    }
+  }
+
   const updateData: Partial<typeof tenants.$inferInsert> = {
     updatedAt: new Date(),
   };
@@ -99,22 +128,24 @@ export async function updateCompanyProfile(
   if (input.name !== undefined) updateData.name = input.name;
   if (input.legalName !== undefined) updateData.legalName = input.legalName;
   if (input.logoUrl !== undefined) updateData.logoUrl = input.logoUrl || null;
+  if (input.logoDocumentId !== undefined) updateData.logoDocumentId = input.logoDocumentId;
   if (input.address !== undefined) updateData.address = input.address;
   if (input.taxId !== undefined) updateData.taxId = input.taxId;
   if (input.locale !== undefined) updateData.locale = input.locale;
   if (input.defaultCurrency !== undefined) updateData.defaultCurrency = input.defaultCurrency;
   if (input.timezone !== undefined) updateData.timezone = input.timezone;
   if (input.financialYear !== undefined) updateData.financialYear = input.financialYear;
-  if (input.numberingPreferences !== undefined) {
+  if (input.dateFormat !== undefined) updateData.dateFormat = input.dateFormat;
+  if (incomingNumbering !== undefined) {
     updateData.numberingPreferences = {
       ...(existing.numberingPreferences ?? {}),
-      ...input.numberingPreferences,
+      ...incomingNumbering,
     };
   }
-  if (input.modulePreferences !== undefined) {
+  if (incomingModules !== undefined) {
     updateData.modulePreferences = {
       ...(existing.modulePreferences ?? {}),
-      ...input.modulePreferences,
+      ...incomingModules,
     };
   }
 
@@ -138,6 +169,8 @@ export async function updateCompanyProfile(
         defaultCurrency: existing.defaultCurrency.trim(),
         timezone: existing.timezone,
         financialYear: existing.financialYear,
+        dateFormat: existing.dateFormat,
+        modulePreferences: existing.modulePreferences,
       },
       afterData: updateData,
       requestId,
@@ -152,12 +185,14 @@ export async function updateCompanyProfile(
     legalName: updated.legalName,
     slug: updated.slug,
     logoUrl: updated.logoUrl,
+    logoDocumentId: updated.logoDocumentId,
     address: updated.address,
     taxId: updated.taxId,
     locale: updated.locale,
     defaultCurrency: updated.defaultCurrency.trim(),
     timezone: updated.timezone,
     financialYear: updated.financialYear,
+    dateFormat: updated.dateFormat,
     numberingPreferences: updated.numberingPreferences,
     modulePreferences: updated.modulePreferences,
     status: updated.status,
@@ -183,13 +218,30 @@ export async function listBranches(tenantId: string, query: OrgQuery) {
     );
   }
 
-  const rows = await db
-    .select()
-    .from(branches)
-    .where(and(...conditions))
-    .orderBy(asc(branches.name));
+  const offset = (query.page - 1) * query.limit;
 
-  return { branches: rows };
+  const [[totalRow], rows] = await Promise.all([
+    db.select({ count: sql<number>`count(*)::int` }).from(branches).where(and(...conditions)),
+    db
+      .select()
+      .from(branches)
+      .where(and(...conditions))
+      .orderBy(asc(branches.name))
+      .limit(query.limit)
+      .offset(offset),
+  ]);
+
+  const total = totalRow?.count ?? 0;
+
+  return {
+    branches: rows,
+    pagination: {
+      page: query.page,
+      limit: query.limit,
+      total,
+      totalPages: Math.ceil(total / query.limit),
+    },
+  };
 }
 
 export async function createBranch(
@@ -326,8 +378,9 @@ export async function listDepartments(tenantId: string, query: OrgQuery) {
   if (query.status) {
     conditions.push(eq(departments.status, query.status));
   }
-  if (query.branchId) {
-    conditions.push(eq(departments.branchId, query.branchId));
+  const effectiveBranchId = query.branchId ?? query.branch_id;
+  if (effectiveBranchId) {
+    conditions.push(eq(departments.branchId, effectiveBranchId));
   }
   if (query.search) {
     conditions.push(ilike(departments.name, `%${query.search}%`));
@@ -492,8 +545,13 @@ export async function listTeams(tenantId: string, query: OrgQuery) {
   if (query.status) {
     conditions.push(eq(teams.status, query.status));
   }
-  if (query.departmentId) {
-    conditions.push(eq(teams.departmentId, query.departmentId));
+  const effectiveDeptId = query.departmentId ?? query.department_id;
+  if (effectiveDeptId) {
+    conditions.push(eq(teams.departmentId, effectiveDeptId));
+  }
+  const effectiveBranchId = query.branchId ?? query.branch_id;
+  if (effectiveBranchId) {
+    conditions.push(eq(departments.branchId, effectiveBranchId));
   }
   if (query.search) {
     conditions.push(ilike(teams.name, `%${query.search}%`));
@@ -591,9 +649,10 @@ export async function createTeam(
     }
   }
 
+  const incomingMembers = input.memberIds ?? input.memberUserIds ?? [];
   const usersToValidate: string[] = [];
   if (input.managerUserId) usersToValidate.push(input.managerUserId);
-  if (input.memberIds && input.memberIds.length > 0) usersToValidate.push(...input.memberIds);
+  if (incomingMembers.length > 0) usersToValidate.push(...incomingMembers);
   if (usersToValidate.length > 0) {
     await assertTenantUsers(tenantId, usersToValidate);
   }
@@ -612,7 +671,7 @@ export async function createTeam(
       })
       .returning();
 
-    const uniqueMemberIds = Array.from(new Set(input.memberIds ?? []));
+    const uniqueMemberIds = Array.from(new Set(incomingMembers));
     if (uniqueMemberIds.length > 0) {
       await tx.insert(teamMembers).values(
         uniqueMemberIds.map((userId) => ({

@@ -44,6 +44,7 @@ export const updateCompanySchema = z.object({
       message: "Logo URL must be a valid http/https URL",
     })
     .optional(),
+  logoDocumentId: z.string().uuid().optional().nullable(),
   address: addressSchema,
   taxId: z.string().trim().max(100).optional(),
   locale: z.string().trim().min(2).max(20).optional(),
@@ -59,15 +60,22 @@ export const updateCompanySchema = z.object({
     .refine(isValidTimezone, { message: "Valid IANA timezone dalein (jaise Asia/Kolkata)" })
     .optional(),
   financialYear: z.string().trim().min(3).max(50).optional(),
+  dateFormat: z.string().trim().min(4).max(30).optional(),
   numberingPreferences: numberingPreferencesSchema,
+  numberingRules: numberingPreferencesSchema,
   modulePreferences: z.record(z.string(), z.unknown()).optional(),
+  moduleSettings: z.record(z.string(), z.unknown()).optional(),
 });
 
 export const orgQuerySchema = z.object({
   status: z.enum(["ACTIVE", "INACTIVE"]).optional(),
   branchId: z.string().uuid().optional(),
+  branch_id: z.string().uuid().optional(),
   departmentId: z.string().uuid().optional(),
+  department_id: z.string().uuid().optional(),
   search: z.string().trim().optional(),
+  page: z.coerce.number().int().min(1).default(1),
+  limit: z.coerce.number().int().min(1).max(100).default(20),
 });
 
 export const createBranchSchema = z.object({
@@ -106,6 +114,7 @@ export const createTeamSchema = z.object({
   parentTeamId: z.string().uuid("Valid Parent Team ID dalein").nullable().optional(),
   managerUserId: z.string().uuid("Valid Manager User ID dalein").nullable().optional(),
   memberIds: z.array(z.string().uuid("Valid User ID dalein")).optional(),
+  memberUserIds: z.array(z.string().uuid("Valid User ID dalein")).optional(),
   status: z.enum(["ACTIVE", "INACTIVE"]).default("ACTIVE"),
 });
 

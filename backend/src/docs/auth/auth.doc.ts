@@ -258,6 +258,41 @@ export const authDoc = {
         },
       },
     },
+    "/api/v1/auth/invitations/accept": {
+      post: {
+        tags: ["[Shared] Auth"],
+        summary: "Accept a team invitation & join workspace",
+        description:
+          "Validates invitation token, sets user password, creates active tenant membership with assigned roles/branch/department, updates seat usage, and returns JWT tokens.",
+        requestBody: {
+          required: true,
+          content: {
+            "application/json": {
+              schema: {
+                type: "object",
+                required: ["token", "password"],
+                properties: {
+                  token: { type: "string" },
+                  password: { type: "string", format: "password", example: "WelcomePass#2026" },
+                  fullName: { type: "string", example: "Amit Verma" },
+                },
+              },
+            },
+          },
+        },
+        responses: {
+          "201": {
+            description: "Invitation accepted and user logged in",
+            content: {
+              "application/json": {
+                schema: { $ref: "#/components/schemas/AuthSuccessResponse" },
+              },
+            },
+          },
+          "400": { description: "Invalid, revoked, or expired token" },
+        },
+      },
+    },
     "/api/v1/auth/me": {
       get: {
         tags: ["[Shared] Auth"],

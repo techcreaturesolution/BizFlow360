@@ -1,5 +1,5 @@
 // Team invitations schema.
-import { index, pgTable, text, timestamp, uuid, varchar } from "drizzle-orm/pg-core";
+import { index, jsonb, pgTable, text, timestamp, uuid, varchar } from "drizzle-orm/pg-core";
 import { tenants } from "./tenants";
 import { users } from "./users";
 import { roles } from "./roles";
@@ -17,6 +17,7 @@ export const userInvitations = pgTable(
     email: text("email").notNull(),
     fullName: text("full_name").notNull(),
     roleId: uuid("role_id").references(() => roles.id, { onDelete: "set null" }),
+    roleIds: jsonb("role_ids").$type<string[]>().default([]),
     branchId: varchar("branch_id", { length: 100 }),
     departmentId: varchar("department_id", { length: 100 }),
     tokenHash: text("token_hash").notNull(),

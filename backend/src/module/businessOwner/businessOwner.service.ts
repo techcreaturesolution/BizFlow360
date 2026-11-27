@@ -16,6 +16,7 @@ import { writeAudit } from "../../lib/audit";
 import { ensureStandardPermissions } from "../../db/tenantDefaults";
 import { Errors } from "../../lib/errors";
 import { hashToken } from "../../lib/jwt";
+import { resolveRecordScope, type AuthContext } from "../../middlewares/guards";
 import type {
   AssignRolePermissionsInput,
   AssignUserRolesInput,
@@ -26,8 +27,20 @@ import type {
   UpdateUserStatusInput,
 } from "./businessOwner.model";
 
-export async function getTeamMembers(tenantId: string, query: TeamMembersQuery) {
+export async function getTeamMembers(auth: AuthContext, query: TeamMembersQuery) {
+  const tenantId = auth.tenantId!;
+  const scopeCtx = await resolveRecordScope(auth, "AUTH.USERS.VIEW", "AUTH.USERS.VIEW_TEAM");
   const conditions = [eq(tenantMemberships.tenantId, tenantId)];
+
+  if (scopeCtx.scope === "TEAM_DEPARTMENT") {
+    const scopeParts = [inArray(tenantMemberships.userId, scopeCtx.teamUserIds)];
+    if (scopeCtx.departmentIds.length > 0) {
+      scopeParts.push(inArray(tenantMemberships.departmentId, scopeCtx.departmentIds));
+    }
+    conditions.push(or(...scopeParts)!);
+  } else if (scopeCtx.scope === "OWN_ONLY") {
+    conditions.push(eq(tenantMemberships.userId, auth.userId));
+  }
 
   if (query.status) {
     conditions.push(eq(tenantMemberships.status, query.status));
@@ -102,6 +115,7 @@ export async function getTeamMembers(tenantId: string, query: TeamMembersQuery) 
     .offset(offset);
 
   return {
+    scope: scopeCtx.scope,
     members: rows,
     pagination: {
       page: query.page,

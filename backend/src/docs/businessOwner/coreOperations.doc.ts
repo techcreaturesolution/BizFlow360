@@ -19,11 +19,14 @@ export const coreOperationsDoc = {
     "/api/v1/finance/expenses": {
       get: {
         tags: ["[Core] Finance (Expenses & Receivables)"],
-        summary: "List expenses",
+        summary: "List expenses (company-wide for Owner, team/dept scoped for Manager)",
         security: [{ bearerAuth: [] }],
         parameters: [
-          { name: "status", in: "query", schema: { type: "string", enum: ["DRAFT", "SUBMITTED", "APPROVED", "REJECTED", "PAID"] } },
+          { name: "status", in: "query", schema: { type: "string", enum: ["DRAFT", "SUBMITTED", "PENDING_FINANCE", "APPROVED", "REJECTED", "PAID"] } },
           { name: "category", in: "query", schema: { type: "string" } },
+          { name: "submitted_by", in: "query", schema: { type: "string", format: "uuid" } },
+          { name: "from", in: "query", schema: { type: "string", format: "date" } },
+          { name: "to", in: "query", schema: { type: "string", format: "date" } },
           { name: "page", in: "query", schema: { type: "integer", default: 1 } },
           { name: "limit", in: "query", schema: { type: "integer", default: 20 } },
         ],
@@ -40,6 +43,21 @@ export const coreOperationsDoc = {
           },
         },
         responses: { "201": { description: "Expense created" } },
+      },
+    },
+    "/api/v1/finance/expenses/{id}": {
+      patch: {
+        tags: ["[Core] Finance (Expenses & Receivables)"],
+        summary: "Edit DRAFT or REJECTED expense before resubmission",
+        security: [{ bearerAuth: [] }],
+        parameters: [{ name: "id", in: "path", required: true, schema: { type: "string", format: "uuid" } }],
+        requestBody: {
+          required: true,
+          content: {
+            "application/json": { schema: { $ref: "#/components/schemas/CreateExpenseInput" } },
+          },
+        },
+        responses: { "200": { description: "Expense updated" } },
       },
     },
     "/api/v1/finance/expenses/{id}/submit": {
@@ -114,12 +132,13 @@ export const coreOperationsDoc = {
     "/api/v1/tasks": {
       get: {
         tags: ["[Core] Tasks"],
-        summary: "List tasks (company-wide for Owner, assigned-only for staff)",
+        summary: "List tasks (company-wide for Owner, team/dept for Manager, assigned-only for staff)",
         security: [{ bearerAuth: [] }],
         parameters: [
-          { name: "status", in: "query", schema: { type: "string", enum: ["TODO", "IN_PROGRESS", "IN_REVIEW", "DONE", "CANCELLED"] } },
+          { name: "status", in: "query", schema: { type: "string", enum: ["TODO", "IN_PROGRESS", "IN_REVIEW", "REVIEW", "DONE", "COMPLETED", "BLOCKED", "CANCELLED"] } },
           { name: "priority", in: "query", schema: { type: "string", enum: ["LOW", "MEDIUM", "HIGH", "URGENT"] } },
-          { name: "assigneeUserId", in: "query", schema: { type: "string", format: "uuid" } },
+          { name: "assignee_user_id", in: "query", schema: { type: "string", format: "uuid" } },
+          { name: "due_at", in: "query", schema: { type: "string", format: "date-time" } },
           { name: "search", in: "query", schema: { type: "string" } },
         ],
         responses: { "200": { description: "Paginated tasks" } },
@@ -183,7 +202,7 @@ export const coreOperationsDoc = {
     "/api/v1/tasks/{id}/comments": {
       post: {
         tags: ["[Core] Tasks"],
-        summary: "Add comment on a task",
+        summary: "Add comment on a task (supports body & mentions[])",
         security: [{ bearerAuth: [] }],
         parameters: [{ name: "id", in: "path", required: true, schema: { type: "string", format: "uuid" } }],
         requestBody: {
@@ -192,8 +211,11 @@ export const coreOperationsDoc = {
             "application/json": {
               schema: {
                 type: "object",
-                required: ["comment"],
-                properties: { comment: { type: "string", example: "Sent revised deck to client" } },
+                properties: {
+                  comment: { type: "string", example: "Sent revised deck to client" },
+                  body: { type: "string" },
+                  mentions: { type: "array", items: { type: "string", format: "uuid" } },
+                },
               },
             },
           },

@@ -115,9 +115,11 @@ export const updateDepartmentHandler: RequestHandler = async (req, res) => {
 
 // 4. Teams
 export const listTeamsHandler: RequestHandler = async (req, res) => {
-  const tenantId = requireTenantId(req);
+  if (!req.auth || !req.auth.tenantId) {
+    throw Errors.forbidden("Operation requires an active tenant workspace context.");
+  }
   const query = orgQuerySchema.parse(req.query);
-  const result = await listTeams(tenantId, query);
+  const result = await listTeams(req.auth, query);
   return sendSuccess(res, result);
 };
 

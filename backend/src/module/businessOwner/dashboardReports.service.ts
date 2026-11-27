@@ -1,7 +1,8 @@
 // Dashboard & Reports Service: Overview KPIs, Module Analytics, Async Exports & Saved Widgets.
-import { and, desc, eq, gte, isNull, lte, or, sql } from "drizzle-orm";
+import { and, desc, eq, gte, inArray, isNull, lte, or, sql } from "drizzle-orm";
 import { db } from "../../db";
 import {
+  approvalRequests,
   auditLogs,
   branches,
   crmLeads,
@@ -23,6 +24,7 @@ import {
 } from "../../db/schema";
 import { writeAudit } from "../../lib/audit";
 import { Errors } from "../../lib/errors";
+import { resolveRecordScope, type AuthContext } from "../../middlewares/guards";
 import type {
   AnalyticsQuery,
   DashboardSummaryQuery,
@@ -76,11 +78,21 @@ const DEFAULT_DASHBOARD_WIDGETS: DashboardWidgetConfig[] = [
 // ==========================================
 // 1. OVERVIEW KPIs (GET /dashboard/summary)
 // ==========================================
-export async function getDashboardSummary(tenantId: string, query: DashboardSummaryQuery) {
+export async function getDashboardSummary(auth: AuthContext, query: DashboardSummaryQuery) {
+  const tenantId = auth.tenantId!;
+  const scopeCtx = await resolveRecordScope(auth, "REPORTS.DASHBOARD.VIEW_ALL", "REPORTS.DASHBOARD.VIEW");
   const range = resolveDateRange(query.period, query.from, query.to);
   const branchId = query.branch_id ?? query.branchId;
   const departmentId = query.department_id ?? query.departmentId;
   const ownerUserId = query.owner_user_id ?? query.ownerUserId;
+
+  if (
+    scopeCtx.scope === "TEAM_DEPARTMENT" &&
+    departmentId &&
+    !scopeCtx.departmentIds.includes(departmentId)
+  ) {
+    throw Errors.forbidden("You do not have permission to view another department's dashboard metrics.");
+  }
 
   const [tenant] = await db
     .select()
@@ -94,12 +106,69 @@ export async function getDashboardSummary(tenantId: string, query: DashboardSumm
 
   const currency = tenant.defaultCurrency.trim();
 
-  // Real organization & user breakdown
+  // Real organization & user breakdown (scoped cleanly!)
   const membershipConditions = [eq(tenantMemberships.tenantId, tenantId)];
   if (branchId) membershipConditions.push(eq(tenantMemberships.branchId, branchId));
   if (departmentId) membershipConditions.push(eq(tenantMemberships.departmentId, departmentId));
   if (query.status) {
     membershipConditions.push(eq(tenantMemberships.status, query.status as "ACTIVE" | "INACTIVE"));
+  }
+  if (scopeCtx.scope === "TEAM_DEPARTMENT") {
+    const scopeParts = [inArray(tenantMemberships.userId, scopeCtx.teamUserIds)];
+    if (scopeCtx.departmentIds.length > 0) {
+      scopeParts.push(inArray(tenantMemberships.departmentId, scopeCtx.departmentIds));
+    }
+    membershipConditions.push(or(...scopeParts)!);
+  } else if (scopeCtx.scope === "OWN_ONLY") {
+    membershipConditions.push(eq(tenantMemberships.userId, auth.userId));
+  }
+
+  const taskConditions = [eq(tasks.tenantId, tenantId)];
+  if (branchId) taskConditions.push(eq(tasks.branchId, branchId));
+  if (departmentId) taskConditions.push(eq(tasks.departmentId, departmentId));
+  if (scopeCtx.scope === "TEAM_DEPARTMENT") {
+    const tParts = [
+      inArray(tasks.assigneeUserId, scopeCtx.teamUserIds),
+      inArray(tasks.createdBy, scopeCtx.teamUserIds),
+    ];
+    if (scopeCtx.departmentIds.length > 0) {
+      tParts.push(inArray(tasks.departmentId, scopeCtx.departmentIds));
+    }
+    taskConditions.push(or(...tParts)!);
+  } else if (scopeCtx.scope === "OWN_ONLY") {
+    taskConditions.push(or(eq(tasks.assigneeUserId, auth.userId), eq(tasks.createdBy, auth.userId))!);
+  }
+
+  const expenseConditions = [
+    eq(financeExpenses.tenantId, tenantId),
+    gte(financeExpenses.createdAt, range.start),
+    lte(financeExpenses.createdAt, range.end),
+  ];
+  if (scopeCtx.scope === "TEAM_DEPARTMENT") {
+    const eParts = [inArray(financeExpenses.ownerUserId, scopeCtx.teamUserIds)];
+    if (scopeCtx.departmentIds.length > 0) {
+      eParts.push(inArray(financeExpenses.departmentId, scopeCtx.departmentIds));
+    }
+    expenseConditions.push(or(...eParts)!);
+  } else if (scopeCtx.scope === "OWN_ONLY") {
+    expenseConditions.push(eq(financeExpenses.ownerUserId, auth.userId));
+  }
+
+  const approvalConditions = [
+    eq(approvalRequests.tenantId, tenantId),
+    eq(approvalRequests.status, "PENDING"),
+  ];
+  if (scopeCtx.scope === "TEAM_DEPARTMENT") {
+    const aParts = [
+      eq(approvalRequests.approverUserId, auth.userId),
+      inArray(approvalRequests.requestedBy, scopeCtx.teamUserIds),
+    ];
+    if (scopeCtx.departmentIds.length > 0) {
+      aParts.push(inArray(approvalRequests.departmentId, scopeCtx.departmentIds));
+    }
+    approvalConditions.push(or(...aParts)!);
+  } else if (scopeCtx.scope === "OWN_ONLY") {
+    approvalConditions.push(eq(approvalRequests.requestedBy, auth.userId));
   }
 
   const [
@@ -116,6 +185,7 @@ export async function getDashboardSummary(tenantId: string, query: DashboardSumm
     invoiceStats,
     expenseStats,
     taskRows,
+    [pendingApprovalsRow],
   ] = await Promise.all([
     db
       .select({
@@ -215,26 +285,18 @@ export async function getDashboardSummary(tenantId: string, query: DashboardSumm
         amount: financeExpenses.amount,
       })
       .from(financeExpenses)
-      .where(
-        and(
-          eq(financeExpenses.tenantId, tenantId),
-          gte(financeExpenses.createdAt, range.start),
-          lte(financeExpenses.createdAt, range.end),
-        ),
-      ),
+      .where(and(...expenseConditions)),
     db
       .select({
         status: tasks.status,
         dueAt: tasks.dueAt,
       })
       .from(tasks)
-      .where(
-        and(
-          eq(tasks.tenantId, tenantId),
-          ...(branchId ? [eq(tasks.branchId, branchId)] : []),
-          ...(departmentId ? [eq(tasks.departmentId, departmentId)] : []),
-        ),
-      ),
+      .where(and(...taskConditions)),
+    db
+      .select({ count: sql<number>`count(*)::int` })
+      .from(approvalRequests)
+      .where(and(...approvalConditions)),
   ]);
 
   const activeUsersCount = allMemberships.filter((m) => m.status === "ACTIVE").length;
@@ -250,6 +312,7 @@ export async function getDashboardSummary(tenantId: string, query: DashboardSumm
   const branchesCount = activeBranchCount?.count ?? 0;
   const departmentsCount = activeDeptCount?.count ?? 0;
   const teamsCount = activeTeamCount?.count ?? 0;
+  const pendingApprovalsCount = pendingApprovalsRow?.count ?? 0;
 
   // Company Setup Progress Checklist
   const setupChecklist = [
@@ -275,18 +338,30 @@ export async function getDashboardSummary(tenantId: string, query: DashboardSumm
   const totalClientDue = Number(invoiceStats[0]?.balanceDue ?? 0);
 
   const approvedExpenses = expenseStats.filter((e) => e.status === "APPROVED" || e.status === "PAID");
-  const pendingExpenses = expenseStats.filter((e) => e.status === "SUBMITTED");
+  const pendingExpenses = expenseStats.filter(
+    (e) => e.status === "SUBMITTED" || e.status === "PENDING_FINANCE",
+  );
   const totalExpensesAmt = approvedExpenses.reduce((s, e) => s + Number(e.amount), 0);
 
   const now = new Date();
   const pendingTasksCount = taskRows.filter((t) => t.status === "TODO").length;
-  const inProgressTasksCount = taskRows.filter((t) => t.status === "IN_PROGRESS" || t.status === "IN_REVIEW").length;
-  const completedTasksCount = taskRows.filter((t) => t.status === "DONE").length;
+  const inProgressTasksCount = taskRows.filter(
+    (t) => t.status === "IN_PROGRESS" || t.status === "IN_REVIEW" || t.status === "REVIEW",
+  ).length;
+  const completedTasksCount = taskRows.filter(
+    (t) => t.status === "DONE" || t.status === "COMPLETED",
+  ).length;
   const overdueTasksCount = taskRows.filter(
-    (t) => t.dueAt && t.dueAt < now && t.status !== "DONE" && t.status !== "CANCELLED",
+    (t) =>
+      t.dueAt &&
+      t.dueAt < now &&
+      t.status !== "DONE" &&
+      t.status !== "COMPLETED" &&
+      t.status !== "CANCELLED",
   ).length;
 
   return {
+    scope: scopeCtx.scope,
     workspace: {
       name: tenant.name,
       status: tenant.status,
@@ -299,8 +374,16 @@ export async function getDashboardSummary(tenantId: string, query: DashboardSumm
       to: range.end.toISOString(),
       branchId: branchId ?? null,
       departmentId: departmentId ?? null,
+      lockedDepartmentIds: scopeCtx.scope === "TEAM_DEPARTMENT" ? scopeCtx.departmentIds : null,
       ownerUserId: ownerUserId ?? null,
       status: query.status ?? null,
+    },
+    team_summary: {
+      team_members_count: allMemberships.length,
+      pending_approvals_count: pendingApprovalsCount,
+      overdue_tasks_count: overdueTasksCount,
+      pending_expenses_count: pendingExpenses.length,
+      team_expenses_total: Number(totalExpensesAmt.toFixed(2)),
     },
     // Admin-focused summary payload fields
     users_summary: {
@@ -391,10 +474,12 @@ export async function getDashboardSummary(tenantId: string, query: DashboardSumm
 // 2. MODULE ANALYTICS (GET /analytics/*)
 // ==========================================
 export async function getModuleAnalytics(
-  tenantId: string,
+  auth: AuthContext,
   moduleType: "sales" | "finance" | "hr" | "projects",
   query: AnalyticsQuery,
 ) {
+  const tenantId = auth.tenantId!;
+  const scopeCtx = await resolveRecordScope(auth, "REPORTS.ANALYTICS.VIEW_ALL", "REPORTS.ANALYTICS.VIEW");
   const range = resolveDateRange(query.period, query.from, query.to);
   const branchId = query.branch_id ?? query.branchId;
   const departmentId = query.department_id ?? query.departmentId;
@@ -514,33 +599,81 @@ export async function getModuleAnalytics(
     };
   }
 
-  // Projects / Tasks Analytics
+  // Projects / Tasks Analytics (scoped for Manager vs Owner)
+  const deptFiltered =
+    scopeCtx.scope === "TEAM_DEPARTMENT" && scopeCtx.departmentIds.length > 0
+      ? deptRows.filter((d) => scopeCtx.departmentIds.includes(d.id))
+      : deptRows;
+
   const teamRows = await db
     .select({ id: teams.id, name: teams.name, departmentId: teams.departmentId })
     .from(teams)
-    .where(eq(teams.tenantId, tenantId));
+    .where(
+      and(
+        eq(teams.tenantId, tenantId),
+        ...(scopeCtx.scope === "TEAM_DEPARTMENT" && scopeCtx.teamIds.length > 0
+          ? [inArray(teams.id, scopeCtx.teamIds)]
+          : []),
+      ),
+    );
+
+  const taskRows = await db
+    .select({
+      status: tasks.status,
+      departmentId: tasks.departmentId,
+      assigneeUserId: tasks.assigneeUserId,
+    })
+    .from(tasks)
+    .where(
+      and(
+        eq(tasks.tenantId, tenantId),
+        ...(scopeCtx.scope === "TEAM_DEPARTMENT"
+          ? [
+              or(
+                inArray(tasks.assigneeUserId, scopeCtx.teamUserIds),
+                ...(scopeCtx.departmentIds.length > 0
+                  ? [inArray(tasks.departmentId, scopeCtx.departmentIds)]
+                  : []),
+              )!,
+            ]
+          : []),
+      ),
+    );
+
+  const completedTasks = taskRows.filter(
+    (t) => t.status === "DONE" || t.status === "COMPLETED",
+  );
+  const completionRate =
+    taskRows.length > 0 ? Math.round((completedTasks.length / taskRows.length) * 100) : 0;
 
   return {
+    scope: scopeCtx.scope,
     module: "PROJECTS",
     appliedFilters,
     metrics: {
-      totalProjectsCount: 0,
-      onTrackCount: 0,
-      atRiskCount: 0,
-      taskCompletionRatePercent: 0,
+      totalTasksCount: taskRows.length,
+      completedTasksCount: completedTasks.length,
+      pendingTasksCount: taskRows.length - completedTasks.length,
+      taskCompletionRatePercent: completionRate,
     },
     charts: {
-      departmentWisePerformance: deptRows.map((d) => ({
-        departmentId: d.id,
-        departmentName: d.name,
-        completedTasks: 0,
-        pendingTasks: 0,
-      })),
+      departmentWisePerformance: deptFiltered.map((d) => {
+        const dTasks = taskRows.filter((t) => t.departmentId === d.id);
+        const dCompleted = dTasks.filter(
+          (t) => t.status === "DONE" || t.status === "COMPLETED",
+        ).length;
+        return {
+          departmentId: d.id,
+          departmentName: d.name,
+          completedTasks: dCompleted,
+          pendingTasks: dTasks.length - dCompleted,
+        };
+      }),
       teamWorkload: teamRows.map((t) => ({
         teamId: t.id,
         teamName: t.name,
-        assignedTasks: 0,
-        completedTasks: 0,
+        assignedTasks: taskRows.filter((tk) => tk.departmentId === t.departmentId).length,
+        completedTasks: completedTasks.filter((tk) => tk.departmentId === t.departmentId).length,
       })),
     },
   };

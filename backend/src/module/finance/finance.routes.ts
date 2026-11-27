@@ -14,6 +14,7 @@ import {
   listExpensesHandler,
   rejectExpenseHandler,
   submitExpenseHandler,
+  updateExpenseHandler,
 } from "./finance.controller";
 
 const router = Router();
@@ -22,7 +23,7 @@ router.get(
   "/expenses",
   jwtAuthGuard,
   entitlementGuard("FINANCE"),
-  permissionsGuard("FINANCE.EXPENSES.VIEW", "FINANCE.EXPENSES.VIEW_ALL"),
+  permissionsGuard("FINANCE.EXPENSES.VIEW", "FINANCE.EXPENSES.VIEW_TEAM", "FINANCE.EXPENSES.VIEW_ALL"),
   listExpensesHandler,
 );
 
@@ -32,6 +33,14 @@ router.post(
   entitlementGuard("FINANCE"),
   permissionsGuard("FINANCE.EXPENSES.MANAGE"),
   createExpenseHandler,
+);
+
+router.patch(
+  "/expenses/:id",
+  jwtAuthGuard,
+  entitlementGuard("FINANCE"),
+  permissionsGuard("FINANCE.EXPENSES.MANAGE"),
+  updateExpenseHandler,
 );
 
 router.post(

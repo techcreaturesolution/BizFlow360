@@ -23,7 +23,7 @@ router.get(
   "/my",
   jwtAuthGuard,
   entitlementGuard("TASKS"),
-  permissionsGuard("TASKS.TASKS.VIEW", "TASKS.TASKS.VIEW_ALL"),
+  permissionsGuard("TASKS.TASKS.VIEW", "TASKS.TASKS.VIEW_TEAM", "TASKS.TASKS.VIEW_ALL"),
   listMyTasksHandler,
 );
 
@@ -31,7 +31,7 @@ router.get(
   "/",
   jwtAuthGuard,
   entitlementGuard("TASKS"),
-  permissionsGuard("TASKS.TASKS.VIEW", "TASKS.TASKS.VIEW_ALL"),
+  permissionsGuard("TASKS.TASKS.VIEW", "TASKS.TASKS.VIEW_TEAM", "TASKS.TASKS.VIEW_ALL"),
   listTasksHandler,
 );
 
@@ -47,7 +47,7 @@ router.get(
   "/:id",
   jwtAuthGuard,
   entitlementGuard("TASKS"),
-  permissionsGuard("TASKS.TASKS.VIEW", "TASKS.TASKS.VIEW_ALL"),
+  permissionsGuard("TASKS.TASKS.VIEW", "TASKS.TASKS.VIEW_TEAM", "TASKS.TASKS.VIEW_ALL"),
   getTaskDetailHandler,
 );
 

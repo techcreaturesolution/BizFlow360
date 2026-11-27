@@ -16,6 +16,7 @@ export const approvalsNotificationsDoc = {
         security: [{ bearerAuth: [] }],
         parameters: [
           { name: "status", in: "query", schema: { type: "string", enum: ["PENDING", "APPROVED", "REJECTED", "CANCELLED"] } },
+          { name: "module", in: "query", schema: { type: "string", enum: ["QUOTATION", "EXPENSE", "PURCHASE_ORDER", "LEAVE_REQUEST"] } },
           { name: "entityType", in: "query", schema: { type: "string", enum: ["QUOTATION", "EXPENSE", "PURCHASE_ORDER", "LEAVE_REQUEST"] } },
           { name: "branchId", in: "query", schema: { type: "string", format: "uuid" } },
           { name: "departmentId", in: "query", schema: { type: "string", format: "uuid" } },
@@ -90,6 +91,23 @@ export const approvalsNotificationsDoc = {
           "400": { description: "Reason or comment is required" },
           "404": { description: "Approval request not found" },
           "409": { description: "Approval request already decided" },
+        },
+      },
+    },
+    "/api/v1/workflows/instances/{id}": {
+      get: {
+        tags: ["[Business Owner] Approvals & Notifications"],
+        summary: "Get workflow / approval step history",
+        description:
+          "Returns step-by-step approval history (actor, timestamp, action, comment) for an approval instance. Enforces team/department scope for Managers.",
+        security: [{ bearerAuth: [] }],
+        parameters: [
+          { name: "id", in: "path", required: true, schema: { type: "string", format: "uuid" } },
+        ],
+        responses: {
+          "200": { description: "Workflow instance and step history" },
+          "403": { description: "Forbidden" },
+          "404": { description: "Workflow instance not found" },
         },
       },
     },

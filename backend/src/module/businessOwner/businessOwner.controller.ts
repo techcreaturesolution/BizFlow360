@@ -44,9 +44,11 @@ function requireUserId(req: Parameters<RequestHandler>[0]): string {
 }
 
 export const getTeamMembersHandler: RequestHandler = async (req, res) => {
-  const tenantId = requireTenantId(req);
+  if (!req.auth || !req.auth.tenantId) {
+    throw Errors.forbidden("Operation requires an active tenant workspace context.");
+  }
   const query = teamMembersQuerySchema.parse(req.query);
-  const result = await getTeamMembers(tenantId, query);
+  const result = await getTeamMembers(req.auth, query);
   return sendSuccess(res, result);
 };
 

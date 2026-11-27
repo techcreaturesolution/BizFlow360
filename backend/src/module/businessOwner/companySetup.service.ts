@@ -14,6 +14,7 @@ import {
 } from "../../db/schema";
 import { writeAudit } from "../../lib/audit";
 import { Errors } from "../../lib/errors";
+import { resolveRecordScope, type AuthContext } from "../../middlewares/guards";
 import type {
   CreateBranchInput,
   CreateDepartmentInput,
@@ -74,6 +75,7 @@ export async function getCompanyProfile(tenantId: string) {
     dateFormat: company.dateFormat,
     numberingPreferences: company.numberingPreferences,
     modulePreferences: company.modulePreferences,
+    expenseApprovalThreshold: Number(company.expenseApprovalThreshold),
     status: company.status,
     planId: company.planId,
     updatedAt: company.updatedAt,
@@ -149,6 +151,9 @@ export async function updateCompanyProfile(
       ...incomingModules,
     };
   }
+  if (input.expenseApprovalThreshold !== undefined) {
+    updateData.expenseApprovalThreshold = input.expenseApprovalThreshold.toFixed(2);
+  }
 
   const [updated] = await db.transaction(async (tx) => {
     const rows = await tx
@@ -196,6 +201,7 @@ export async function updateCompanyProfile(
     dateFormat: updated.dateFormat,
     numberingPreferences: updated.numberingPreferences,
     modulePreferences: updated.modulePreferences,
+    expenseApprovalThreshold: Number(updated.expenseApprovalThreshold),
     status: updated.status,
     updatedAt: updated.updatedAt,
   };
@@ -540,8 +546,25 @@ export async function updateDepartment(
 // ==========================================
 // 4. TEAMS (GET / POST / PUT /teams)
 // ==========================================
-export async function listTeams(tenantId: string, query: OrgQuery) {
+export async function listTeams(auth: AuthContext, query: OrgQuery) {
+  const tenantId = auth.tenantId!;
+  const scopeCtx = await resolveRecordScope(auth, "ORG.TEAMS.MANAGE", "ORG.TEAMS.VIEW");
   const conditions = [eq(teams.tenantId, tenantId)];
+
+  if (scopeCtx.scope === "TEAM_DEPARTMENT") {
+    const scopeParts = [eq(teams.managerUserId, auth.userId)];
+    if (scopeCtx.teamIds.length > 0) scopeParts.push(inArray(teams.id, scopeCtx.teamIds));
+    if (scopeCtx.departmentIds.length > 0) {
+      scopeParts.push(inArray(teams.departmentId, scopeCtx.departmentIds));
+    }
+    conditions.push(or(...scopeParts)!);
+  } else if (scopeCtx.scope === "OWN_ONLY") {
+    if (scopeCtx.teamIds.length > 0) {
+      conditions.push(inArray(teams.id, scopeCtx.teamIds));
+    } else {
+      conditions.push(eq(teams.managerUserId, auth.userId));
+    }
+  }
 
   if (query.status) {
     conditions.push(eq(teams.status, query.status));
@@ -613,6 +636,7 @@ export async function listTeams(tenantId: string, query: OrgQuery) {
   }
 
   return {
+    scope: scopeCtx.scope,
     teams: teamRows.map((t) => ({
       ...t,
       members: membersByTeam[t.id] ?? [],

@@ -1,8 +1,9 @@
-// Approvals & Notifications schema: Approval Inbox queue, In-app Notifications, and Preferences.
+// Approvals & Notifications schema: Approval Inbox queue, Workflow Steps History, In-app Notifications, and Preferences.
 import {
   boolean,
   char,
   index,
+  integer,
   jsonb,
   numeric,
   pgTable,
@@ -82,6 +83,7 @@ export const approvalRequests = pgTable(
     branchId: uuid("branch_id"),
     departmentId: uuid("department_id"),
     status: varchar("status", { length: 20 }).$type<ApprovalStatus>().notNull().default("PENDING"),
+    currentStage: varchar("current_stage", { length: 40 }).notNull().default("MANAGER_REVIEW"),
     decisionComment: text("decision_comment"),
     decidedBy: uuid("decided_by").references(() => users.id, { onDelete: "set null" }),
     decidedAt: timestamp("decided_at", { withTimezone: true }),
@@ -93,6 +95,30 @@ export const approvalRequests = pgTable(
     index("approval_requests_tenant_id_idx").on(table.tenantId),
     index("approval_requests_status_idx").on(table.status),
     index("approval_requests_approver_idx").on(table.approverUserId),
+  ],
+);
+
+export const workflowInstanceSteps = pgTable(
+  "workflow_instance_steps",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    tenantId: uuid("tenant_id")
+      .notNull()
+      .references(() => tenants.id, { onDelete: "cascade" }),
+    approvalRequestId: uuid("approval_request_id")
+      .notNull()
+      .references(() => approvalRequests.id, { onDelete: "cascade" }),
+    stepNumber: integer("step_number").notNull().default(1),
+    stepName: varchar("step_name", { length: 100 }).notNull(),
+    action: varchar("action", { length: 40 }).notNull(), // SUBMITTED, APPROVED, FORWARDED_TO_FINANCE, REJECTED
+    actorUserId: uuid("actor_user_id").references(() => users.id, { onDelete: "set null" }),
+    comment: text("comment"),
+    decidedAt: timestamp("decided_at", { withTimezone: true }).defaultNow().notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    index("workflow_instance_steps_approval_id_idx").on(table.approvalRequestId),
+    index("workflow_instance_steps_tenant_id_idx").on(table.tenantId),
   ],
 );
 

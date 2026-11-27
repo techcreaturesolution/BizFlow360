@@ -3,9 +3,13 @@ import type { NextFunction, Request, Response } from "express";
 import { and, eq, inArray, isNull, or } from "drizzle-orm";
 import { db } from "../db";
 import {
+  branches,
+  departments,
   permissions,
   rolePermissions,
   roles,
+  teamMembers,
+  teams,
   tenantEntitlements,
   tenantMemberships,
   tenants,
@@ -19,6 +23,8 @@ export interface AuthContext {
   userId: string;
   tenantId: string | null;
   membershipId?: string | null;
+  branchId?: string | null;
+  departmentId?: string | null;
   roles: string[];
   permissions: string[];
   email?: string;
@@ -58,6 +64,8 @@ export async function jwtAuthGuard(req: Request, _res: Response, next: NextFunct
     }
 
     let membershipId: string | null = null;
+    let branchId: string | null = null;
+    let departmentId: string | null = null;
     let effectiveRoles = user.roles;
     const effectivePermissions = new Set<string>();
 
@@ -93,6 +101,8 @@ export async function jwtAuthGuard(req: Request, _res: Response, next: NextFunct
           return next(Errors.forbidden("Your membership in this company is not active."));
         }
         membershipId = membership.id;
+        branchId = membership.branchId ?? null;
+        departmentId = membership.departmentId ?? null;
         if (membership.roleName && !effectiveRoles.includes(membership.roleName)) {
           effectiveRoles = [...effectiveRoles, membership.roleName];
         }
@@ -135,6 +145,8 @@ export async function jwtAuthGuard(req: Request, _res: Response, next: NextFunct
       userId: user.id,
       tenantId: payload.tenantId,
       membershipId,
+      branchId,
+      departmentId,
       roles: effectiveRoles,
       permissions: Array.from(effectivePermissions),
       email: user.email,
@@ -240,9 +252,16 @@ export function permissionsGuard(...requiredPermissions: string[]) {
   };
 }
 
-// Record Scope Helper:
-// OWNER, ADMIN, SUPER_ADMIN, or roles with module-level VIEW_ALL get tenant-wide access.
-// Regular executives (e.g. Sales Executive) only see records where ownerUserId/assigneeUserId == userId.
+// Record Scope Helper (3-tier: COMPANY_WIDE | TEAM_DEPARTMENT | OWN_ONLY)
+export type RecordScopeLevel = "COMPANY_WIDE" | "TEAM_DEPARTMENT" | "OWN_ONLY";
+
+export interface RecordScopeContext {
+  scope: RecordScopeLevel;
+  departmentIds: string[];
+  teamIds: string[];
+  teamUserIds: string[];
+}
+
 export function hasTenantWideScope(auth: AuthContext, allPermission?: string): boolean {
   if (
     auth.permissions.includes("*") ||
@@ -253,6 +272,91 @@ export function hasTenantWideScope(auth: AuthContext, allPermission?: string): b
     return true;
   }
   return allPermission ? auth.permissions.includes(allPermission) : false;
+}
+
+export async function resolveRecordScope(
+  auth: AuthContext,
+  allPermission: string,
+  teamPermission?: string,
+): Promise<RecordScopeContext> {
+  if (hasTenantWideScope(auth, allPermission)) {
+    return {
+      scope: "COMPANY_WIDE",
+      departmentIds: [],
+      teamIds: [],
+      teamUserIds: [],
+    };
+  }
+
+  const isManager =
+    auth.roles.includes("MANAGER") ||
+    (teamPermission ? auth.permissions.includes(teamPermission) : false);
+
+  if (!isManager || !auth.tenantId) {
+    return {
+      scope: "OWN_ONLY",
+      departmentIds: auth.departmentId ? [auth.departmentId] : [],
+      teamIds: [],
+      teamUserIds: [auth.userId],
+    };
+  }
+
+  const tenantId = auth.tenantId;
+
+  // Resolve departments managed by user + user's own department
+  const managedDepts = await db
+    .select({ id: departments.id })
+    .from(departments)
+    .where(and(eq(departments.tenantId, tenantId), eq(departments.managerUserId, auth.userId)));
+
+  const departmentIdSet = new Set<string>(managedDepts.map((d) => d.id));
+  if (auth.departmentId) {
+    departmentIdSet.add(auth.departmentId);
+  }
+  const departmentIds = Array.from(departmentIdSet);
+
+  // Resolve teams managed by user or belonging to those departments
+  const teamConditions = [eq(teams.managerUserId, auth.userId)];
+  if (departmentIds.length > 0) {
+    teamConditions.push(inArray(teams.departmentId, departmentIds));
+  }
+  const relevantTeams = await db
+    .select({ id: teams.id })
+    .from(teams)
+    .where(and(eq(teams.tenantId, tenantId), or(...teamConditions)));
+
+  const teamIds = relevantTeams.map((t) => t.id);
+
+  // Collect all member user IDs from those teams and departments
+  const userIdSet = new Set<string>([auth.userId]);
+
+  if (teamIds.length > 0) {
+    const tMembers = await db
+      .select({ userId: teamMembers.userId })
+      .from(teamMembers)
+      .where(and(eq(teamMembers.tenantId, tenantId), inArray(teamMembers.teamId, teamIds)));
+    for (const m of tMembers) userIdSet.add(m.userId);
+  }
+
+  if (departmentIds.length > 0) {
+    const deptMembers = await db
+      .select({ userId: tenantMemberships.userId })
+      .from(tenantMemberships)
+      .where(
+        and(
+          eq(tenantMemberships.tenantId, tenantId),
+          inArray(tenantMemberships.departmentId, departmentIds),
+        ),
+      );
+    for (const m of deptMembers) userIdSet.add(m.userId);
+  }
+
+  return {
+    scope: "TEAM_DEPARTMENT",
+    departmentIds,
+    teamIds,
+    teamUserIds: Array.from(userIdSet),
+  };
 }
 
 // IdempotencyGuard for retry-sensitive APIs (payments, order conversions, invitations)

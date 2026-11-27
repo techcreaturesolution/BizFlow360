@@ -21,7 +21,8 @@ function getOrderedServers(host?: string) {
     description: "Local development server",
   };
   const productionServer = {
-    url: "https://bizflow360-p3sp.onrender.com",
+    url: 
+    ,
     description: "Production server (Render)",
   };
 

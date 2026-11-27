@@ -161,12 +161,12 @@ export function entitlementGuard(moduleCode: ModuleCode | string) {
       )
       .limit(1);
 
-    // AUTH and ORG are core workspace modules required for team/company setup on all plans unless explicitly disabled
-    if (moduleCode === "AUTH" || moduleCode === "ORG") {
+    // AUTH, ORG and REPORTS are core workspace modules required for team/company setup & dashboard unless explicitly disabled
+    if (moduleCode === "AUTH" || moduleCode === "ORG" || moduleCode === "REPORTS") {
       if (entitlement && !entitlement.isEnabled) {
         return next(
           Errors.forbidden(
-            `${moduleCode === "AUTH" ? "Team & RBAC" : "Organization Setup"} access has been disabled for your workspace.`,
+            `Module '${moduleCode}' access has been disabled for your workspace.`,
           ),
         );
       }

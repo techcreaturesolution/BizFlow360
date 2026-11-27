@@ -28,6 +28,14 @@ import {
   updateDepartmentHandler,
   updateTeamHandler,
 } from "./companySetup.controller";
+import {
+  createModuleAnalyticsHandler,
+  getDashboardSummaryHandler,
+  getDashboardWidgetsHandler,
+  listReportExportsHandler,
+  saveDashboardWidgetsHandler,
+  triggerReportExportHandler,
+} from "./dashboardReports.controller";
 
 const router = Router();
 
@@ -188,6 +196,82 @@ router.put(
   entitlementGuard("ORG"),
   permissionsGuard("ORG.TEAMS.MANAGE"),
   updateTeamHandler,
+);
+
+// ==========================================
+// C. Dashboard & Reports
+// ==========================================
+router.get(
+  "/dashboard/summary",
+  jwtAuthGuard,
+  entitlementGuard("REPORTS"),
+  permissionsGuard("REPORTS.DASHBOARD.VIEW"),
+  getDashboardSummaryHandler,
+);
+
+router.get(
+  "/analytics/sales",
+  jwtAuthGuard,
+  entitlementGuard("SALES"),
+  permissionsGuard("REPORTS.ANALYTICS.VIEW", "SALES.QUOTATIONS.VIEW"),
+  createModuleAnalyticsHandler("sales"),
+);
+
+router.get(
+  "/analytics/finance",
+  jwtAuthGuard,
+  entitlementGuard("FINANCE"),
+  permissionsGuard("REPORTS.ANALYTICS.VIEW", "FINANCE.INVOICES.VIEW"),
+  createModuleAnalyticsHandler("finance"),
+);
+
+router.get(
+  "/analytics/hr",
+  jwtAuthGuard,
+  entitlementGuard("HR"),
+  permissionsGuard("REPORTS.ANALYTICS.VIEW", "HR.EMPLOYEES.VIEW"),
+  createModuleAnalyticsHandler("hr"),
+);
+
+router.get(
+  "/analytics/projects",
+  jwtAuthGuard,
+  entitlementGuard("TASKS"),
+  permissionsGuard("REPORTS.ANALYTICS.VIEW"),
+  createModuleAnalyticsHandler("projects"),
+);
+
+router.post(
+  "/reports/export",
+  jwtAuthGuard,
+  entitlementGuard("REPORTS"),
+  permissionsGuard("REPORTS.EXPORT.CREATE"),
+  idempotencyGuard,
+  triggerReportExportHandler,
+);
+
+router.get(
+  "/reports/export",
+  jwtAuthGuard,
+  entitlementGuard("REPORTS"),
+  permissionsGuard("REPORTS.EXPORT.CREATE"),
+  listReportExportsHandler,
+);
+
+router.get(
+  "/dashboard/widgets",
+  jwtAuthGuard,
+  entitlementGuard("REPORTS"),
+  permissionsGuard("REPORTS.DASHBOARD.VIEW"),
+  getDashboardWidgetsHandler,
+);
+
+router.put(
+  "/dashboard/widgets",
+  jwtAuthGuard,
+  entitlementGuard("REPORTS"),
+  permissionsGuard("REPORTS.DASHBOARD.MANAGE"),
+  saveDashboardWidgetsHandler,
 );
 
 export default router;

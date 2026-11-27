@@ -28,6 +28,12 @@ export const STANDARD_PERMISSIONS = [
   { code: "ORG.TEAMS.VIEW", moduleCode: "ORG", description: "View teams and team member hierarchy" },
   { code: "ORG.TEAMS.MANAGE", moduleCode: "ORG", description: "Create teams and assign team managers/members" },
 
+  // Dashboard & Reports
+  { code: "REPORTS.DASHBOARD.VIEW", moduleCode: "REPORTS", description: "View company overview KPIs and dashboard widgets" },
+  { code: "REPORTS.DASHBOARD.MANAGE", moduleCode: "REPORTS", description: "Customize and save personal dashboard widget layouts" },
+  { code: "REPORTS.ANALYTICS.VIEW", moduleCode: "REPORTS", description: "View department-wise analytics across enabled modules" },
+  { code: "REPORTS.EXPORT.CREATE", moduleCode: "REPORTS", description: "Trigger async CSV, XLSX, and PDF report exports" },
+
   // CRM
   { code: "CRM.LEADS.VIEW", moduleCode: "CRM", description: "View CRM leads and customer records" },
   { code: "CRM.LEADS.MANAGE", moduleCode: "CRM", description: "Create, edit and manage CRM leads" },

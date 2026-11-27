@@ -15,3 +15,4 @@ export * from "./tenantMemberships";
 export * from "./invitations";
 export * from "./passwordResets";
 export * from "./organization";
+export * from "./dashboardReports";

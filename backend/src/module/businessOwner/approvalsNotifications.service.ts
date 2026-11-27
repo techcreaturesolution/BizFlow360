@@ -1,8 +1,11 @@
 // Approvals & Notifications Service: Approval Inbox, Approve/Reject with Audit & Workflow History, In-App Alerts & Preferences.
 import { and, asc, desc, eq, gte, ilike, inArray, lte, or, sql } from "drizzle-orm";
+// Approvals & Notifications Service: Approval Inbox, Approve/Reject with Audit & Workflow History, In-App Alerts & Preferences.
+import { and, asc, desc, eq, gte, ilike, inArray, lte, or, sql } from "drizzle-orm";
 import { db } from "../../db";
 import {
   approvalRequests,
+  auditLogs,
   auditLogs,
   DEFAULT_NOTIFICATION_PREFERENCES,
   notificationPreferences,
@@ -10,14 +13,17 @@ import {
   salesQuotations,
   users,
   workflowInstanceSteps,
+  workflowInstanceSteps,
 } from "../../db/schema";
 import { writeAudit } from "../../lib/audit";
 import { Errors } from "../../lib/errors";
+import { resolveRecordScope, type AuthContext } from "../../middlewares/guards";
 import { resolveRecordScope, type AuthContext } from "../../middlewares/guards";
 import type {
   ApprovalDecisionInput,
   ApprovalInboxQuery,
   NotificationsQuery,
+  TenantAuditLogsQuery,
   TenantAuditLogsQuery,
   UpdateNotificationPreferencesInput,
 } from "./approvalsNotifications.model";
@@ -49,9 +55,30 @@ export async function getApprovalInbox(auth: AuthContext, query: ApprovalInboxQu
     );
   }
 
+  if (scopeCtx.scope === "TEAM_DEPARTMENT") {
+    const scopeParts = [
+      eq(approvalRequests.approverUserId, auth.userId),
+      inArray(approvalRequests.requestedBy, scopeCtx.teamUserIds),
+    ];
+    if (scopeCtx.departmentIds.length > 0) {
+      scopeParts.push(inArray(approvalRequests.departmentId, scopeCtx.departmentIds));
+    }
+    conditions.push(or(...scopeParts)!);
+  } else if (scopeCtx.scope === "OWN_ONLY") {
+    conditions.push(
+      or(
+        eq(approvalRequests.approverUserId, auth.userId),
+        eq(approvalRequests.requestedBy, auth.userId),
+      )!,
+    );
+  }
+
   if (query.status) {
     conditions.push(eq(approvalRequests.status, query.status));
   }
+  const effectiveEntityType = query.entityType ?? query.module;
+  if (effectiveEntityType) {
+    conditions.push(eq(approvalRequests.entityType, effectiveEntityType));
   const effectiveEntityType = query.entityType ?? query.module;
   if (effectiveEntityType) {
     conditions.push(eq(approvalRequests.entityType, effectiveEntityType));
@@ -60,6 +87,12 @@ export async function getApprovalInbox(auth: AuthContext, query: ApprovalInboxQu
     conditions.push(eq(approvalRequests.branchId, query.branchId));
   }
   if (query.departmentId) {
+    if (
+      scopeCtx.scope === "TEAM_DEPARTMENT" &&
+      !scopeCtx.departmentIds.includes(query.departmentId)
+    ) {
+      throw Errors.forbidden("Cannot view approval requests for another department.");
+    }
     if (
       scopeCtx.scope === "TEAM_DEPARTMENT" &&
       !scopeCtx.departmentIds.includes(query.departmentId)
@@ -107,6 +140,7 @@ export async function getApprovalInbox(auth: AuthContext, query: ApprovalInboxQu
 
   return {
     scope: scopeCtx.scope,
+    scope: scopeCtx.scope,
     approvals: rows.map((r) => ({
       id: r.approval.id,
       entityType: r.approval.entityType,
@@ -116,6 +150,7 @@ export async function getApprovalInbox(auth: AuthContext, query: ApprovalInboxQu
       amount: r.approval.amount !== null ? Number(r.approval.amount) : null,
       currency: r.approval.currency.trim(),
       status: r.approval.status,
+      currentStage: r.approval.currentStage,
       currentStage: r.approval.currentStage,
       requestedBy: {
         id: r.approval.requestedBy,
@@ -144,6 +179,7 @@ export async function getApprovalInbox(auth: AuthContext, query: ApprovalInboxQu
 // 2. APPROVE / REJECT (POST /approvals/:id/approve | /reject)
 // ==========================================
 export async function decideApprovalRequest(
+  auth: AuthContext,
   auth: AuthContext,
   approvalId: string,
   decision: "APPROVED" | "REJECTED",
@@ -182,6 +218,19 @@ export async function decideApprovalRequest(
     throw Errors.forbidden("You are not authorized to approve or reject this request.");
   }
 
+  // Enforce Manager Department / Team record scope
+  if (scopeCtx.scope === "TEAM_DEPARTMENT") {
+    const inScope =
+      existing.approverUserId === actorUserId ||
+      scopeCtx.teamUserIds.includes(existing.requestedBy) ||
+      (existing.departmentId ? scopeCtx.departmentIds.includes(existing.departmentId) : false);
+    if (!inScope) {
+      throw Errors.forbidden("You do not have access to decide approvals outside your department/team.");
+    }
+  } else if (scopeCtx.scope === "OWN_ONLY" && existing.approverUserId !== actorUserId) {
+    throw Errors.forbidden("You are not authorized to approve or reject this request.");
+  }
+
   if (existing.status !== "PENDING") {
     throw Errors.conflict(`Approval request is already ${existing.status}.`);
   }
@@ -194,6 +243,7 @@ export async function decideApprovalRequest(
       .update(approvalRequests)
       .set({
         status: decision,
+        currentStage: "COMPLETED",
         currentStage: "COMPLETED",
         decisionComment: commentText,
         decidedBy: actorUserId,
@@ -258,8 +308,10 @@ export async function decideApprovalRequest(
       entityType: "approval_request",
       entityId: approvalId,
       beforeData: { status: existing.status, currentStage: existing.currentStage },
+      beforeData: { status: existing.status, currentStage: existing.currentStage },
       afterData: {
         status: decision,
+        currentStage: "COMPLETED",
         currentStage: "COMPLETED",
         decidedBy: actorUserId,
         decidedAt: now.toISOString(),
@@ -278,6 +330,7 @@ export async function decideApprovalRequest(
       entityType: updated.entityType,
       entityId: updated.entityId,
       status: updated.status,
+      currentStage: updated.currentStage,
       currentStage: updated.currentStage,
       decisionComment: updated.decisionComment,
       decidedBy: updated.decidedBy,
@@ -385,6 +438,9 @@ export async function listNotifications(
     eq(notifications.userId, userId),
   ];
 
+  if (query.unread_only === true) {
+    conditions.push(eq(notifications.isRead, false));
+  } else if (query.isRead !== undefined) {
   if (query.unread_only === true) {
     conditions.push(eq(notifications.isRead, false));
   } else if (query.isRead !== undefined) {
@@ -601,6 +657,77 @@ export async function updateNotificationPreferences(
     preferences: saved.preferences,
     updatedAt: saved.updatedAt,
     message: "Notification preferences updated successfully.",
+  };
+}
+
+// ==========================================
+// 5. TENANT AUDIT LOGS (GET /audit-logs - Read-only)
+// ==========================================
+export async function listTenantAuditLogs(tenantId: string, query: TenantAuditLogsQuery) {
+  const conditions = [eq(auditLogs.tenantId, tenantId)];
+
+  const actorId = query.actor_user_id ?? query.actorUserId;
+  if (actorId) {
+    conditions.push(eq(auditLogs.actorUserId, actorId));
+  }
+  if (query.action) {
+    conditions.push(ilike(auditLogs.action, `%${query.action}%`));
+  }
+  const entityType = query.entity_type ?? query.entityType;
+  if (entityType) {
+    conditions.push(eq(auditLogs.entityType, entityType));
+  }
+  if (query.from) {
+    const d = new Date(query.from);
+    if (!Number.isNaN(d.getTime())) conditions.push(gte(auditLogs.createdAt, d));
+  }
+  if (query.to) {
+    const d = new Date(query.to);
+    if (!Number.isNaN(d.getTime())) conditions.push(lte(auditLogs.createdAt, d));
+  }
+
+  const offset = (query.page - 1) * query.limit;
+
+  const [[totalRow], rows] = await Promise.all([
+    db.select({ count: sql<number>`count(*)::int` }).from(auditLogs).where(and(...conditions)),
+    db
+      .select({
+        log: auditLogs,
+        actorName: users.fullName,
+        actorEmail: users.email,
+      })
+      .from(auditLogs)
+      .leftJoin(users, eq(users.id, auditLogs.actorUserId))
+      .where(and(...conditions))
+      .orderBy(desc(auditLogs.createdAt))
+      .limit(query.limit)
+      .offset(offset),
+  ]);
+
+  const total = totalRow?.count ?? 0;
+
+  return {
+    auditLogs: rows.map((r) => ({
+      id: r.log.id,
+      tenant_id: r.log.tenantId,
+      actor_user_id: r.log.actorUserId,
+      actor_name: r.actorName ?? null,
+      actor_email: r.actorEmail ?? null,
+      action: r.log.action,
+      entity_type: r.log.entityType,
+      entity_id: r.log.entityId,
+      before_data: r.log.beforeData,
+      after_data: r.log.afterData,
+      reason: r.log.reason,
+      request_id: r.log.requestId,
+      created_at: r.log.createdAt,
+    })),
+    pagination: {
+      page: query.page,
+      limit: query.limit,
+      total,
+      totalPages: Math.ceil(total / query.limit),
+    },
   };
 }
 

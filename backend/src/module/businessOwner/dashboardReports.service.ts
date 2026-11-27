@@ -3,6 +3,7 @@ import { and, desc, eq, gte, inArray, isNull, lt, lte, or, sql } from "drizzle-o
 import { db } from "../../db";
 import {
   approvalRequests,
+  approvalRequests,
   auditLogs,
   branches,
   crmCustomers,
@@ -20,6 +21,7 @@ import {
   salesQuotations,
   subscriptionInvoices,
   tasks,
+  tasks,
   teams,
   tenantEntitlements,
   tenantMemberships,
@@ -27,10 +29,13 @@ import {
   usageMetrics,
   userInvitations,
   users,
+  userInvitations,
+  users,
   type DashboardWidgetConfig,
 } from "../../db/schema";
 import { writeAudit } from "../../lib/audit";
 import { Errors } from "../../lib/errors";
+import { resolveRecordScope, type AuthContext } from "../../middlewares/guards";
 import { resolveRecordScope, type AuthContext } from "../../middlewares/guards";
 import type {
   AnalyticsQuery,
@@ -114,6 +119,7 @@ export async function getDashboardSummary(auth: AuthContext, query: DashboardSum
 
   const [tenant] = await db
     .select()
+    .select()
     .from(tenants)
     .where(eq(tenants.id, tenantId))
     .limit(1);
@@ -124,6 +130,7 @@ export async function getDashboardSummary(auth: AuthContext, query: DashboardSum
 
   const currency = tenant.defaultCurrency.trim();
 
+  // Real organization & user breakdown (scoped cleanly!)
   // Real organization & user breakdown (scoped cleanly!)
   const membershipConditions = [eq(tenantMemberships.tenantId, tenantId)];
   if (branchId) membershipConditions.push(eq(tenantMemberships.branchId, branchId));
@@ -296,7 +303,13 @@ export async function getDashboardSummary(auth: AuthContext, query: DashboardSum
         action: auditLogs.action,
         entityType: auditLogs.entityType,
         entityId: auditLogs.entityId,
+        entityId: auditLogs.entityId,
         actorUserId: auditLogs.actorUserId,
+        actorName: users.fullName,
+        beforeData: auditLogs.beforeData,
+        afterData: auditLogs.afterData,
+        reason: auditLogs.reason,
+        requestId: auditLogs.requestId,
         actorName: users.fullName,
         beforeData: auditLogs.beforeData,
         afterData: auditLogs.afterData,
@@ -305,6 +318,7 @@ export async function getDashboardSummary(auth: AuthContext, query: DashboardSum
         createdAt: auditLogs.createdAt,
       })
       .from(auditLogs)
+      .leftJoin(users, eq(users.id, auditLogs.actorUserId))
       .leftJoin(users, eq(users.id, auditLogs.actorUserId))
       .where(eq(auditLogs.tenantId, tenantId))
       .orderBy(desc(auditLogs.createdAt))
@@ -437,6 +451,7 @@ export async function getDashboardSummary(auth: AuthContext, query: DashboardSum
       status: tenant.status,
       currency,
       enabledModules,
+      enabledModules,
     },
     appliedFilters: {
       period: query.period,
@@ -444,6 +459,7 @@ export async function getDashboardSummary(auth: AuthContext, query: DashboardSum
       to: range.end.toISOString(),
       branchId: branchId ?? null,
       departmentId: departmentId ?? null,
+      lockedDepartmentIds: scopeCtx.scope === "TEAM_DEPARTMENT" ? scopeCtx.departmentIds : null,
       lockedDepartmentIds: scopeCtx.scope === "TEAM_DEPARTMENT" ? scopeCtx.departmentIds : null,
       ownerUserId: ownerUserId ?? null,
       status: query.status ?? null,
@@ -495,6 +511,9 @@ export async function getDashboardSummary(auth: AuthContext, query: DashboardSum
         totalRevenue: totalCollected,
         invoicedAmount: totalInvoiced,
         collectedAmount: totalCollected,
+        totalRevenue: totalCollected,
+        invoicedAmount: totalInvoiced,
+        collectedAmount: totalCollected,
         growthPercent: 0,
         currency,
       },
@@ -510,6 +529,8 @@ export async function getDashboardSummary(auth: AuthContext, query: DashboardSum
       dueInvoices: {
         clientOverdueCount: totalClientDue > 0 ? 1 : 0,
         clientOverdueAmount: totalClientDue,
+        clientOverdueCount: totalClientDue > 0 ? 1 : 0,
+        clientOverdueAmount: totalClientDue,
         platformOverdueInvoicesCount: overdueSubscriptionInvoices[0]?.count ?? 0,
         platformOverdueAmount: Number(overdueSubscriptionInvoices[0]?.total ?? 0),
         currency,
@@ -518,9 +539,17 @@ export async function getDashboardSummary(auth: AuthContext, query: DashboardSum
         totalExpenses: Number(totalExpensesAmt.toFixed(2)),
         approvedExpensesCount: approvedExpenses.length,
         pendingApprovalCount: pendingExpenses.length,
+        totalExpenses: Number(totalExpensesAmt.toFixed(2)),
+        approvedExpensesCount: approvedExpenses.length,
+        pendingApprovalCount: pendingExpenses.length,
         currency,
       },
       tasks: {
+        totalTasks: taskRows.length,
+        pendingCount: pendingTasksCount,
+        inProgressCount: inProgressTasksCount,
+        overdueCount: overdueTasksCount,
+        completedCount: completedTasksCount,
         totalTasks: taskRows.length,
         pendingCount: pendingTasksCount,
         inProgressCount: inProgressTasksCount,
@@ -534,10 +563,17 @@ export async function getDashboardSummary(auth: AuthContext, query: DashboardSum
         teamsCount,
         seatsUsed,
         seatLimit,
+        teamMembersCount: allMemberships.length,
+        branchesCount,
+        departmentsCount,
+        teamsCount,
+        seatsUsed,
+        seatLimit,
         storageUsedMb: usage?.storageUsedMb ?? 0,
         apiCallsUsed: usage?.apiCallsUsed ?? 0,
       },
     },
+    recentActivities: recentAuditRows,
     recentActivities: recentAuditRows,
   };
 }
@@ -546,6 +582,7 @@ export async function getDashboardSummary(auth: AuthContext, query: DashboardSum
 // 2. MODULE ANALYTICS (GET /analytics/*)
 // ==========================================
 export async function getModuleAnalytics(
+  auth: AuthContext,
   auth: AuthContext,
   moduleType: "sales" | "finance" | "hr" | "projects",
   query: AnalyticsQuery,
@@ -979,6 +1016,12 @@ export async function getModuleAnalytics(
       ? deptRows.filter((d) => scopeCtx.departmentIds.includes(d.id))
       : deptRows;
 
+  // Projects / Tasks Analytics (scoped for Manager vs Owner)
+  const deptFiltered =
+    scopeCtx.scope === "TEAM_DEPARTMENT" && scopeCtx.departmentIds.length > 0
+      ? deptRows.filter((d) => scopeCtx.departmentIds.includes(d.id))
+      : deptRows;
+
   const teamRows = await db
     .select({ id: teams.id, name: teams.name, departmentId: teams.departmentId })
     .from(teams)
@@ -1019,12 +1062,54 @@ export async function getModuleAnalytics(
   );
   const completionRate =
     taskRows.length > 0 ? Math.round((completedTasks.length / taskRows.length) * 100) : 0;
+    .where(
+      and(
+        eq(teams.tenantId, tenantId),
+        ...(scopeCtx.scope === "TEAM_DEPARTMENT" && scopeCtx.teamIds.length > 0
+          ? [inArray(teams.id, scopeCtx.teamIds)]
+          : []),
+      ),
+    );
+
+  const taskRows = await db
+    .select({
+      status: tasks.status,
+      departmentId: tasks.departmentId,
+      assigneeUserId: tasks.assigneeUserId,
+    })
+    .from(tasks)
+    .where(
+      and(
+        eq(tasks.tenantId, tenantId),
+        ...(scopeCtx.scope === "TEAM_DEPARTMENT"
+          ? [
+              or(
+                inArray(tasks.assigneeUserId, scopeCtx.teamUserIds),
+                ...(scopeCtx.departmentIds.length > 0
+                  ? [inArray(tasks.departmentId, scopeCtx.departmentIds)]
+                  : []),
+              )!,
+            ]
+          : []),
+      ),
+    );
+
+  const completedTasks = taskRows.filter(
+    (t) => t.status === "DONE" || t.status === "COMPLETED",
+  );
+  const completionRate =
+    taskRows.length > 0 ? Math.round((completedTasks.length / taskRows.length) * 100) : 0;
 
   return {
+    scope: scopeCtx.scope,
     scope: scopeCtx.scope,
     module: "PROJECTS",
     appliedFilters,
     metrics: {
+      totalTasksCount: taskRows.length,
+      completedTasksCount: completedTasks.length,
+      pendingTasksCount: taskRows.length - completedTasks.length,
+      taskCompletionRatePercent: completionRate,
       totalTasksCount: taskRows.length,
       completedTasksCount: completedTasks.length,
       pendingTasksCount: taskRows.length - completedTasks.length,
@@ -1043,9 +1128,23 @@ export async function getModuleAnalytics(
           pendingTasks: dTasks.length - dCompleted,
         };
       }),
+      departmentWisePerformance: deptFiltered.map((d) => {
+        const dTasks = taskRows.filter((t) => t.departmentId === d.id);
+        const dCompleted = dTasks.filter(
+          (t) => t.status === "DONE" || t.status === "COMPLETED",
+        ).length;
+        return {
+          departmentId: d.id,
+          departmentName: d.name,
+          completedTasks: dCompleted,
+          pendingTasks: dTasks.length - dCompleted,
+        };
+      }),
       teamWorkload: teamRows.map((t) => ({
         teamId: t.id,
         teamName: t.name,
+        assignedTasks: taskRows.filter((tk) => tk.departmentId === t.departmentId).length,
+        completedTasks: completedTasks.filter((tk) => tk.departmentId === t.departmentId).length,
         assignedTasks: taskRows.filter((tk) => tk.departmentId === t.departmentId).length,
         completedTasks: completedTasks.filter((tk) => tk.departmentId === t.departmentId).length,
       })),

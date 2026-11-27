@@ -15,6 +15,8 @@ export const STANDARD_PERMISSIONS = [
   // Auth & Team
   { code: "AUTH.USERS.VIEW", moduleCode: "AUTH", description: "View all company team members" },
   { code: "AUTH.USERS.VIEW_TEAM", moduleCode: "AUTH", description: "View team and department members (read-only)" },
+  { code: "AUTH.USERS.VIEW", moduleCode: "AUTH", description: "View all company team members" },
+  { code: "AUTH.USERS.VIEW_TEAM", moduleCode: "AUTH", description: "View team and department members (read-only)" },
   { code: "AUTH.USERS.INVITE", moduleCode: "AUTH", description: "Invite new team members" },
   { code: "AUTH.USERS.MANAGE", moduleCode: "AUTH", description: "Activate, deactivate or edit team members" },
   { code: "AUTH.ROLES.MANAGE", moduleCode: "AUTH", description: "Create and edit custom roles and permissions" },
@@ -47,6 +49,7 @@ export const STANDARD_PERMISSIONS = [
   { code: "APPROVALS.INBOX.DECIDE", moduleCode: "APPROVALS", description: "Approve or reject pending approval requests" },
   { code: "NOTIFICATIONS.ALERTS.VIEW", moduleCode: "NOTIFICATIONS", description: "View in-app notifications and manage alert preferences" },
   { code: "AUDIT.LOGS.VIEW", moduleCode: "AUDIT", description: "View company-level audit trail logs" },
+  { code: "AUDIT.LOGS.VIEW", moduleCode: "AUDIT", description: "View company-level audit trail logs" },
 
   // CRM
   { code: "CRM.LEADS.VIEW", moduleCode: "CRM", description: "View assigned CRM leads" },
@@ -74,14 +77,18 @@ export const STANDARD_PERMISSIONS = [
   { code: "FINANCE.INVOICES.MANAGE", moduleCode: "FINANCE", description: "Issue client invoices and record payments" },
   { code: "FINANCE.EXPENSES.VIEW", moduleCode: "FINANCE", description: "View own submitted expenses" },
   { code: "FINANCE.EXPENSES.VIEW_TEAM", moduleCode: "FINANCE", description: "View team and department submitted expenses" },
+  { code: "FINANCE.EXPENSES.VIEW_TEAM", moduleCode: "FINANCE", description: "View team and department submitted expenses" },
   { code: "FINANCE.EXPENSES.VIEW_ALL", moduleCode: "FINANCE", description: "View all company expenses" },
   { code: "FINANCE.EXPENSES.MANAGE", moduleCode: "FINANCE", description: "Create and submit expenses" },
+  { code: "FINANCE.EXPENSES.APPROVE", moduleCode: "FINANCE", description: "Approve or reject submitted team expenses (subject to threshold)" },
+  { code: "FINANCE.EXPENSES.APPROVE_FINAL", moduleCode: "FINANCE", description: "Final finance approval for above-threshold expenses" },
   { code: "FINANCE.EXPENSES.APPROVE", moduleCode: "FINANCE", description: "Approve or reject submitted team expenses (subject to threshold)" },
   { code: "FINANCE.EXPENSES.APPROVE_FINAL", moduleCode: "FINANCE", description: "Final finance approval for above-threshold expenses" },
   { code: "FINANCE.RECEIVABLES.VIEW", moduleCode: "FINANCE", description: "View accounts receivable summary & aging" },
 
   // Tasks
   { code: "TASKS.TASKS.VIEW", moduleCode: "TASKS", description: "View assigned tasks" },
+  { code: "TASKS.TASKS.VIEW_TEAM", moduleCode: "TASKS", description: "View all tasks within own department or team" },
   { code: "TASKS.TASKS.VIEW_TEAM", moduleCode: "TASKS", description: "View all tasks within own department or team" },
   { code: "TASKS.TASKS.VIEW_ALL", moduleCode: "TASKS", description: "View all company tasks" },
   { code: "TASKS.TASKS.MANAGE", moduleCode: "TASKS", description: "Create, assign, update and comment on tasks" },
@@ -183,12 +190,18 @@ export async function initializeTenantDefaults(
     .returning();
 
   // 5. Assign default permissions to ADMIN (excluding BILLING & FINANCE unless Owner grants them), MANAGER, and MEMBER
+  // 5. Assign default permissions to ADMIN (excluding BILLING & FINANCE unless Owner grants them), MANAGER, and MEMBER
   const allPerms = await executor.select().from(permissions);
   const adminDefaultPerms = allPerms.filter(
     (p) => p.moduleCode !== "BILLING" && p.moduleCode !== "FINANCE",
   );
   if (adminRole && adminDefaultPerms.length > 0) {
+  const adminDefaultPerms = allPerms.filter(
+    (p) => p.moduleCode !== "BILLING" && p.moduleCode !== "FINANCE",
+  );
+  if (adminRole && adminDefaultPerms.length > 0) {
     await executor.insert(rolePermissions).values(
+      adminDefaultPerms.map((p) => ({
       adminDefaultPerms.map((p) => ({
         roleId: adminRole.id,
         permissionId: p.id,

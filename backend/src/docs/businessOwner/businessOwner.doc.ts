@@ -261,6 +261,118 @@ export const businessOwnerDoc = {
         },
       },
     },
+    "/api/v1/permissions": {
+      get: {
+        tags: ["[Business Owner] Team & RBAC"],
+        summary: "Get all available RBAC permissions catalog",
+        description:
+          "Returns all MODULE.RESOURCE.ACTION permissions along with a groupedByModule structure for rendering the RBAC matrix checkboxes UI.",
+        security: [{ bearerAuth: [] }],
+        responses: {
+          "200": { description: "Flat list and module-grouped permissions matrix" },
+          "401": { description: "Unauthorized" },
+        },
+      },
+    },
+    "/api/v1/users/{id}/roles": {
+      put: {
+        tags: ["[Business Owner] Team & RBAC"],
+        summary: "Assign or update roles for a joined team member",
+        description:
+          "Reassigns one or more roles (via roleIds array) to an existing team member and writes an audit log. Owner role cannot be stripped.",
+        security: [{ bearerAuth: [] }],
+        parameters: [
+          {
+            name: "id",
+            in: "path",
+            required: true,
+            schema: { type: "string", format: "uuid" },
+            description: "Target team member user ID",
+          },
+        ],
+        requestBody: {
+          required: true,
+          content: {
+            "application/json": {
+              schema: {
+                type: "object",
+                required: ["roleIds"],
+                properties: {
+                  roleIds: {
+                    type: "array",
+                    items: { type: "string", format: "uuid" },
+                  },
+                },
+              },
+            },
+          },
+        },
+        responses: {
+          "200": { description: "User roles updated successfully" },
+          "403": { description: "Forbidden - Cannot modify Owner role" },
+          "404": { description: "User membership not found" },
+        },
+      },
+    },
+    "/api/v1/roles/{id}": {
+      patch: {
+        tags: ["[Business Owner] Team & RBAC"],
+        summary: "Rename or edit a custom role",
+        description: "Updates a custom role's name and/or description. System predefined roles cannot be edited.",
+        security: [{ bearerAuth: [] }],
+        parameters: [
+          {
+            name: "id",
+            in: "path",
+            required: true,
+            schema: { type: "string", format: "uuid" },
+            description: "Custom role ID",
+          },
+        ],
+        requestBody: {
+          required: true,
+          content: {
+            "application/json": {
+              schema: {
+                type: "object",
+                properties: {
+                  name: { type: "string", example: "SENIOR_SALES_LEAD" },
+                  description: { type: "string", example: "Updated description" },
+                },
+              },
+            },
+          },
+        },
+        responses: {
+          "200": { description: "Custom role updated" },
+          "403": { description: "Cannot edit system roles" },
+          "404": { description: "Role not found" },
+          "409": { description: "Role name already exists" },
+        },
+      },
+      delete: {
+        tags: ["[Business Owner] Team & RBAC"],
+        summary: "Delete an unused custom role",
+        description:
+          "Deletes a custom role if no active team members or pending invitations are assigned to it. System roles cannot be deleted.",
+        security: [{ bearerAuth: [] }],
+        parameters: [
+          {
+            name: "id",
+            in: "path",
+            required: true,
+            schema: { type: "string", format: "uuid" },
+            description: "Custom role ID",
+          },
+        ],
+        responses: {
+          "200": { description: "Custom role deleted" },
+          "403": { description: "Cannot delete system roles" },
+          "404": { description: "Role not found" },
+          "409": { description: "Role is currently in use by team members or pending invitations" },
+        },
+      },
+    },
   },
   schemas: {
     InviteMemberInput: {

@@ -9,10 +9,14 @@ import {
 } from "../../middlewares/guards";
 import {
   assignRolePermissionsHandler,
+  assignUserRolesHandler,
   createRoleHandler,
+  deleteRoleHandler,
   getRolesHandler,
   getTeamMembersHandler,
   inviteMemberHandler,
+  listPermissionsCatalogHandler,
+  updateRoleHandler,
   updateUserStatusHandler,
 } from "./businessOwner.controller";
 import {
@@ -87,6 +91,22 @@ router.patch(
   updateUserStatusHandler,
 );
 
+router.put(
+  "/users/:id/roles",
+  jwtAuthGuard,
+  entitlementGuard("AUTH"),
+  permissionsGuard("AUTH.USERS.MANAGE", "AUTH.ROLES.MANAGE"),
+  assignUserRolesHandler,
+);
+
+router.get(
+  "/permissions",
+  jwtAuthGuard,
+  entitlementGuard("AUTH"),
+  permissionsGuard("AUTH.ROLES.MANAGE", "AUTH.USERS.VIEW"),
+  listPermissionsCatalogHandler,
+);
+
 router.get(
   "/roles",
   jwtAuthGuard,
@@ -101,6 +121,22 @@ router.post(
   entitlementGuard("AUTH"),
   permissionsGuard("AUTH.ROLES.MANAGE"),
   createRoleHandler,
+);
+
+router.patch(
+  "/roles/:id",
+  jwtAuthGuard,
+  entitlementGuard("AUTH"),
+  permissionsGuard("AUTH.ROLES.MANAGE"),
+  updateRoleHandler,
+);
+
+router.delete(
+  "/roles/:id",
+  jwtAuthGuard,
+  entitlementGuard("AUTH"),
+  permissionsGuard("AUTH.ROLES.MANAGE"),
+  deleteRoleHandler,
 );
 
 router.put(

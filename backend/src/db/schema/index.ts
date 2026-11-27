@@ -10,3 +10,7 @@ export * from "./tenantEntitlements";
 export * from "./usageMetrics";
 export * from "./users";
 export * from "./sessions";
+export * from "./roles";
+export * from "./tenantMemberships";
+export * from "./invitations";
+export * from "./passwordResets";

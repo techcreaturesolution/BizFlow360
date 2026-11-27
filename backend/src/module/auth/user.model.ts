@@ -1,4 +1,4 @@
-// Auth module ke input/output models (register aur login ke liye).
+// Auth module ke input/output models (register, login, session, password reset aur profile ke liye).
 import { z } from "zod";
 import type { TenantStatus } from "../../db/schema";
 
@@ -32,6 +32,23 @@ export const loginSchema = z.object({
     .string()
     .min(1, "Password is required")
     .max(128, "Password bahut lamba hai"),
+});
+
+export const logoutSchema = z.object({
+  refreshToken: z.string().min(1, "Refresh token is required"),
+});
+
+export const refreshSchema = z.object({
+  refreshToken: z.string().min(1, "Refresh token is required"),
+});
+
+export const forgotPasswordSchema = z.object({
+  email: emailField,
+});
+
+export const resetPasswordSchema = z.object({
+  token: z.string().min(1, "Reset token is required"),
+  newPassword: strongPasswordField,
 });
 
 export const registerSchema = z
@@ -90,6 +107,10 @@ export const registerSchema = z
   );
 
 export type LoginInput = z.infer<typeof loginSchema>;
+export type LogoutInput = z.infer<typeof logoutSchema>;
+export type RefreshInput = z.infer<typeof refreshSchema>;
+export type ForgotPasswordInput = z.infer<typeof forgotPasswordSchema>;
+export type ResetPasswordInput = z.infer<typeof resetPasswordSchema>;
 export type RegisterInput = z.infer<typeof registerSchema>;
 
 export interface TenantInfo {
@@ -109,6 +130,23 @@ export interface LoginUser {
   email: string;
   phone: string | null;
   roles: string[];
+}
+
+export interface TenantMembershipInfo {
+  id: string;
+  tenantId: string;
+  roleName: string;
+  status: string;
+  branchId: string | null;
+  departmentId: string | null;
+  joinedAt: Date | null;
+}
+
+export interface CurrentUserProfile {
+  user: LoginUser;
+  tenant: TenantInfo | null;
+  membership: TenantMembershipInfo | null;
+  effectivePermissions: string[];
 }
 
 export interface AuthResponse {

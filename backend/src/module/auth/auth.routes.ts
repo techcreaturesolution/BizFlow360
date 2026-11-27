@@ -1,13 +1,25 @@
 // Auth routes: /api/v1/auth/*
 import { Router } from "express";
-import { authenticate } from "../../middlewares/authantication";
+import { jwtAuthGuard } from "../../middlewares/guards";
 import { authLimiter } from "../../middlewares/rateLimiter";
-import { loginHandler, meHandler, registerHandler } from "./auth.controller";
+import {
+  forgotPasswordHandler,
+  loginHandler,
+  logoutHandler,
+  meHandler,
+  refreshHandler,
+  registerHandler,
+  resetPasswordHandler,
+} from "./auth.controller";
 
 const router = Router();
 
 router.post("/register", authLimiter, registerHandler);
 router.post("/login", authLimiter, loginHandler);
-router.get("/me", authenticate, meHandler);
+router.post("/logout", logoutHandler);
+router.post("/refresh", refreshHandler);
+router.post("/forgot-password", authLimiter, forgotPasswordHandler);
+router.post("/reset-password", authLimiter, resetPasswordHandler);
+router.get("/me", jwtAuthGuard, meHandler);
 
 export default router;

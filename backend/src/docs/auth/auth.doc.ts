@@ -3,7 +3,7 @@ export const authDoc = {
   tags: [
     {
       name: "[Shared] Auth",
-      description: "User registration, login, and profile endpoints",
+      description: "User registration, login, token rotation, password reset, and profile endpoints",
     },
   ],
   paths: {
@@ -12,7 +12,7 @@ export const authDoc = {
         tags: ["[Shared] Auth"],
         summary: "Register owner account and company workspace",
         description:
-          "Creates a tenant workspace and owner user, hashes password, creates a session, writes an AUTH.REGISTER audit log, and returns JWT tokens.",
+          "Creates a tenant workspace and owner user, seeds default entitlements & roles, writes an AUTH.REGISTER audit log, and returns JWT tokens.",
         requestBody: {
           required: true,
           content: {
@@ -46,14 +46,6 @@ export const authDoc = {
               },
             },
           },
-          "429": {
-            description: "Too many auth attempts",
-            content: {
-              "application/json": {
-                schema: { $ref: "#/components/schemas/ErrorResponse" },
-              },
-            },
-          },
         },
       },
     },
@@ -80,32 +72,183 @@ export const authDoc = {
               },
             },
           },
-          "400": {
-            description: "Validation error",
+          "401": {
+            description: "Invalid credentials",
             content: {
               "application/json": {
                 schema: { $ref: "#/components/schemas/ErrorResponse" },
+              },
+            },
+          },
+        },
+      },
+    },
+    "/api/v1/auth/logout": {
+      post: {
+        tags: ["[Shared] Auth"],
+        summary: "Logout current session",
+        description: "Revokes the active refresh token session in database.",
+        requestBody: {
+          required: true,
+          content: {
+            "application/json": {
+              schema: {
+                type: "object",
+                required: ["refreshToken"],
+                properties: {
+                  refreshToken: { type: "string" },
+                },
+              },
+            },
+          },
+        },
+        responses: {
+          "200": {
+            description: "Logged out successfully",
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  properties: {
+                    success: { type: "boolean", example: true },
+                    data: {
+                      type: "object",
+                      properties: {
+                        message: { type: "string", example: "Logged out successfully" },
+                      },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    },
+    "/api/v1/auth/refresh": {
+      post: {
+        tags: ["[Shared] Auth"],
+        summary: "Rotate refresh token & issue new access token",
+        description: "Rotates refresh token for security and provides a fresh 15-minute access token.",
+        requestBody: {
+          required: true,
+          content: {
+            "application/json": {
+              schema: {
+                type: "object",
+                required: ["refreshToken"],
+                properties: {
+                  refreshToken: { type: "string" },
+                },
+              },
+            },
+          },
+        },
+        responses: {
+          "200": {
+            description: "Tokens rotated successfully",
+            content: {
+              "application/json": {
+                schema: { $ref: "#/components/schemas/AuthSuccessResponse" },
               },
             },
           },
           "401": {
-            description: "Invalid email or password",
+            description: "Invalid, expired, or revoked refresh token",
             content: {
               "application/json": {
                 schema: { $ref: "#/components/schemas/ErrorResponse" },
               },
             },
           },
-          "403": {
-            description: "Account is disabled",
-            content: {
-              "application/json": {
-                schema: { $ref: "#/components/schemas/ErrorResponse" },
+        },
+      },
+    },
+    "/api/v1/auth/forgot-password": {
+      post: {
+        tags: ["[Shared] Auth"],
+        summary: "Request password reset token",
+        description: "Generates a secure password reset token and writes an AUTH.FORGOT_PASSWORD audit log.",
+        requestBody: {
+          required: true,
+          content: {
+            "application/json": {
+              schema: {
+                type: "object",
+                required: ["email"],
+                properties: {
+                  email: { type: "string", format: "email", example: "owner@company.com" },
+                },
               },
             },
           },
-          "429": {
-            description: "Too many login attempts",
+        },
+        responses: {
+          "200": {
+            description: "Reset instructions generated",
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  properties: {
+                    success: { type: "boolean", example: true },
+                    data: {
+                      type: "object",
+                      properties: {
+                        message: { type: "string" },
+                        resetToken: { type: "string" },
+                      },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    },
+    "/api/v1/auth/reset-password": {
+      post: {
+        tags: ["[Shared] Auth"],
+        summary: "Reset password using token",
+        description: "Validates reset token, updates password hash, revokes old sessions, and writes audit log.",
+        requestBody: {
+          required: true,
+          content: {
+            "application/json": {
+              schema: {
+                type: "object",
+                required: ["token", "newPassword"],
+                properties: {
+                  token: { type: "string" },
+                  newPassword: { type: "string", format: "password", example: "NewStrongPass#2026" },
+                },
+              },
+            },
+          },
+        },
+        responses: {
+          "200": {
+            description: "Password reset successfully",
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  properties: {
+                    success: { type: "boolean", example: true },
+                    data: {
+                      type: "object",
+                      properties: {
+                        message: { type: "string" },
+                      },
+                    },
+                  },
+                },
+              },
+            },
+          },
+          "400": {
+            description: "Invalid or expired reset token",
             content: {
               "application/json": {
                 schema: { $ref: "#/components/schemas/ErrorResponse" },
@@ -118,27 +261,20 @@ export const authDoc = {
     "/api/v1/auth/me": {
       get: {
         tags: ["[Shared] Auth"],
-        summary: "Get current authenticated user",
-        security: [{ bearerAuth: [] }],
+        summary: "Current authenticated profile with membership & permissions",
+        description: "Returns the authenticated user, active tenant membership, and effective RBAC permissions.",
+        security: [{ BearerAuth: [] }],
         responses: {
           "200": {
-            description: "Authenticated user details",
+            description: "Authenticated user profile",
             content: {
               "application/json": {
-                schema: { $ref: "#/components/schemas/MeSuccessResponse" },
+                schema: { $ref: "#/components/schemas/CurrentUserProfileResponse" },
               },
             },
           },
           "401": {
-            description: "Missing, invalid, or expired Bearer token",
-            content: {
-              "application/json": {
-                schema: { $ref: "#/components/schemas/ErrorResponse" },
-              },
-            },
-          },
-          "404": {
-            description: "User not found",
+            description: "Unauthorized",
             content: {
               "application/json": {
                 schema: { $ref: "#/components/schemas/ErrorResponse" },
@@ -154,102 +290,113 @@ export const authDoc = {
       type: "object",
       required: ["fullName", "email", "password", "companyName", "workspaceSlug"],
       properties: {
-        fullName: { type: "string", minLength: 2, maxLength: 100, example: "Rahul Sharma" },
-        email: { type: "string", format: "email", example: "rahul@apexsolutions.in" },
-        phone: {
-          type: "string",
-          nullable: true,
-          example: "+919876543210",
-          description: "Optional phone number with country code",
-        },
-        password: {
-          type: "string",
-          minLength: 8,
-          maxLength: 128,
-          example: "Apex@2026",
-          description: "Min 8 chars, 1 uppercase, 1 number, 1 symbol",
-        },
-        confirmPassword: {
-          type: "string",
-          example: "Apex@2026",
-          description: "Optional backend check (must match password if provided)",
-        },
-        companyName: { type: "string", minLength: 2, maxLength: 120, example: "Apex Solutions" },
-        workspaceSlug: {
-          type: "string",
-          minLength: 2,
-          maxLength: 63,
-          pattern: "^[a-z0-9]+(?:-[a-z0-9]+)*$",
-          example: "apex-solutions",
-        },
-        timezone: { type: "string", default: "Asia/Kolkata", example: "Asia/Kolkata" },
-        defaultCurrency: { type: "string", default: "INR", example: "INR" },
+        fullName: { type: "string", example: "Rajesh Sharma" },
+        email: { type: "string", format: "email", example: "rajesh@apexsolutions.com" },
+        phone: { type: "string", example: "+919876543210" },
+        password: { type: "string", format: "password", example: "SecurePass#2026" },
+        confirmPassword: { type: "string", format: "password", example: "SecurePass#2026" },
+        companyName: { type: "string", example: "Apex Solutions Pvt Ltd" },
+        workspaceSlug: { type: "string", example: "apex-solutions" },
+        timezone: { type: "string", example: "Asia/Kolkata" },
+        defaultCurrency: { type: "string", example: "INR" },
       },
     },
     LoginInput: {
       type: "object",
       required: ["email", "password"],
       properties: {
-        email: { type: "string", format: "email", example: "rahul@apexsolutions.in" },
-        password: { type: "string", minLength: 1, maxLength: 128, example: "Apex@2026" },
-      },
-    },
-    TenantInfo: {
-      type: "object",
-      properties: {
-        id: { type: "string", format: "uuid" },
-        name: { type: "string", example: "Apex Solutions" },
-        slug: { type: "string", example: "apex-solutions" },
-        status: {
-          type: "string",
-          enum: ["TRIAL", "ACTIVE", "PAST_DUE", "GRACE", "SUSPENDED", "CANCELLED", "ARCHIVED"],
-          example: "TRIAL",
-        },
-        timezone: { type: "string", example: "Asia/Kolkata" },
-        defaultCurrency: { type: "string", example: "INR" },
-        planId: { type: "string", format: "uuid", nullable: true },
-      },
-    },
-    LoginUser: {
-      type: "object",
-      properties: {
-        id: { type: "string", format: "uuid" },
-        tenantId: { type: "string", format: "uuid", nullable: true },
-        fullName: { type: "string", example: "Rahul Sharma" },
-        email: { type: "string", format: "email", example: "rahul@apexsolutions.in" },
-        phone: { type: "string", nullable: true, example: "+919876543210" },
-        roles: {
-          type: "array",
-          items: { type: "string" },
-          example: ["OWNER"],
-        },
-      },
-    },
-    AuthData: {
-      type: "object",
-      properties: {
-        accessToken: { type: "string" },
-        refreshToken: { type: "string" },
-        user: { $ref: "#/components/schemas/LoginUser" },
-        tenant: {
-          allOf: [{ $ref: "#/components/schemas/TenantInfo" }],
-          nullable: true,
-          description: "Company workspace info (null for SUPER_ADMIN)",
-        },
+        email: { type: "string", format: "email", example: "superadmin@bizflow360.com" },
+        password: { type: "string", format: "password", example: "SuperAdmin@2026" },
       },
     },
     AuthSuccessResponse: {
       type: "object",
       properties: {
         success: { type: "boolean", example: true },
-        data: { $ref: "#/components/schemas/AuthData" },
+        data: {
+          type: "object",
+          properties: {
+            accessToken: { type: "string", example: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..." },
+            refreshToken: { type: "string", example: "f7a8b9c0..." },
+            user: {
+              type: "object",
+              properties: {
+                id: { type: "string", format: "uuid" },
+                tenantId: { type: "string", format: "uuid", nullable: true },
+                fullName: { type: "string" },
+                email: { type: "string" },
+                phone: { type: "string", nullable: true },
+                roles: { type: "array", items: { type: "string" } },
+              },
+            },
+            tenant: {
+              type: "object",
+              nullable: true,
+              properties: {
+                id: { type: "string", format: "uuid" },
+                name: { type: "string" },
+                slug: { type: "string" },
+                status: { type: "string" },
+                timezone: { type: "string" },
+                defaultCurrency: { type: "string" },
+                planId: { type: "string", format: "uuid", nullable: true },
+              },
+            },
+          },
+        },
       },
     },
-    MeSuccessResponse: {
+    CurrentUserProfileResponse: {
       type: "object",
       properties: {
         success: { type: "boolean", example: true },
-        data: { $ref: "#/components/schemas/LoginUser" },
+        data: {
+          type: "object",
+          properties: {
+            user: {
+              type: "object",
+              properties: {
+                id: { type: "string", format: "uuid" },
+                tenantId: { type: "string", format: "uuid", nullable: true },
+                fullName: { type: "string" },
+                email: { type: "string" },
+                phone: { type: "string", nullable: true },
+                roles: { type: "array", items: { type: "string" } },
+              },
+            },
+            tenant: {
+              type: "object",
+              nullable: true,
+              properties: {
+                id: { type: "string", format: "uuid" },
+                name: { type: "string" },
+                slug: { type: "string" },
+                status: { type: "string" },
+                timezone: { type: "string" },
+                defaultCurrency: { type: "string" },
+                planId: { type: "string", format: "uuid", nullable: true },
+              },
+            },
+            membership: {
+              type: "object",
+              nullable: true,
+              properties: {
+                id: { type: "string", format: "uuid" },
+                tenantId: { type: "string", format: "uuid" },
+                roleName: { type: "string", example: "OWNER" },
+                status: { type: "string", example: "ACTIVE" },
+                branchId: { type: "string", nullable: true },
+                departmentId: { type: "string", nullable: true },
+                joinedAt: { type: "string", format: "date-time", nullable: true },
+              },
+            },
+            effectivePermissions: {
+              type: "array",
+              items: { type: "string" },
+              example: ["*", "AUTH.USERS.VIEW", "CRM.LEADS.MANAGE"],
+            },
+          },
+        },
       },
     },
   },

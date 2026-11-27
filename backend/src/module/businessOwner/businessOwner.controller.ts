@@ -4,17 +4,23 @@ import { Errors } from "../../lib/errors";
 import { sendSuccess } from "../../lib/response";
 import {
   assignRolePermissionsSchema,
+  assignUserRolesSchema,
   createRoleSchema,
   inviteMemberSchema,
   teamMembersQuerySchema,
+  updateRoleSchema,
   updateUserStatusSchema,
 } from "./businessOwner.model";
 import {
   assignRolePermissions,
+  assignUserRoles,
   createCustomRole,
+  deleteCustomRole,
   getRoles,
   getTeamMembers,
   inviteTeamMember,
+  listPermissionsCatalog,
+  updateCustomRole,
   updateUserStatus,
 } from "./businessOwner.service";
 
@@ -79,5 +85,36 @@ export const assignRolePermissionsHandler: RequestHandler = async (req, res) => 
   const roleId = req.params.id as string;
   const input = assignRolePermissionsSchema.parse(req.body);
   const result = await assignRolePermissions(tenantId, actorUserId, roleId, input, req.requestId);
+  return sendSuccess(res, result);
+};
+
+export const listPermissionsCatalogHandler: RequestHandler = async (_req, res) => {
+  const result = await listPermissionsCatalog();
+  return sendSuccess(res, result);
+};
+
+export const assignUserRolesHandler: RequestHandler = async (req, res) => {
+  const tenantId = requireTenantId(req);
+  const actorUserId = requireUserId(req);
+  const targetUserId = req.params.id as string;
+  const input = assignUserRolesSchema.parse(req.body);
+  const result = await assignUserRoles(tenantId, actorUserId, targetUserId, input, req.requestId);
+  return sendSuccess(res, result);
+};
+
+export const updateRoleHandler: RequestHandler = async (req, res) => {
+  const tenantId = requireTenantId(req);
+  const actorUserId = requireUserId(req);
+  const roleId = req.params.id as string;
+  const input = updateRoleSchema.parse(req.body);
+  const result = await updateCustomRole(tenantId, actorUserId, roleId, input, req.requestId);
+  return sendSuccess(res, result);
+};
+
+export const deleteRoleHandler: RequestHandler = async (req, res) => {
+  const tenantId = requireTenantId(req);
+  const actorUserId = requireUserId(req);
+  const roleId = req.params.id as string;
+  const result = await deleteCustomRole(tenantId, actorUserId, roleId, req.requestId);
   return sendSuccess(res, result);
 };

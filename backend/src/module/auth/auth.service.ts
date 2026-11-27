@@ -1,5 +1,5 @@
 // Auth service: tenant + user register, login, session rotation, logout, password reset aur audit log.
-import { and, eq, gt, isNull } from "drizzle-orm";
+import { and, eq, gt, inArray, isNull, or } from "drizzle-orm";
 import { randomBytes } from "crypto";
 import { db, type Db } from "../../db";
 import {
@@ -473,12 +473,30 @@ export async function getMe(userId: string): Promise<CurrentUserProfile> {
         joinedAt: membership.joinedAt,
       };
 
+      const effectiveRoles = Array.from(
+        new Set([...user.roles, ...(membership.roleName ? [membership.roleName] : [])]),
+      );
+
+      const roleConditions = [];
       if (membership.roleId) {
+        roleConditions.push(eq(roles.id, membership.roleId));
+      }
+      if (effectiveRoles.length > 0) {
+        roleConditions.push(
+          and(
+            inArray(roles.name, effectiveRoles),
+            or(eq(roles.tenantId, user.tenantId), isNull(roles.tenantId)),
+          ),
+        );
+      }
+
+      if (roleConditions.length > 0) {
         const perms = await db
           .select({ code: permissions.code })
-          .from(rolePermissions)
+          .from(roles)
+          .innerJoin(rolePermissions, eq(rolePermissions.roleId, roles.id))
           .innerJoin(permissions, eq(permissions.id, rolePermissions.permissionId))
-          .where(eq(rolePermissions.roleId, membership.roleId));
+          .where(roleConditions.length === 1 ? roleConditions[0] : or(...roleConditions));
 
         for (const p of perms) {
           effectivePermissions.add(p.code);

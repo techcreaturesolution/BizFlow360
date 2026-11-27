@@ -1,6 +1,6 @@
 // 3-Layer Security Architecture: JwtAuthGuard -> EntitlementGuard -> PermissionsGuard + IdempotencyGuard
 import type { NextFunction, Request, Response } from "express";
-import { and, eq } from "drizzle-orm";
+import { and, eq, inArray, isNull, or } from "drizzle-orm";
 import { db } from "../db";
 import {
   permissions,
@@ -97,13 +97,27 @@ export async function jwtAuthGuard(req: Request, _res: Response, next: NextFunct
           effectiveRoles = [...effectiveRoles, membership.roleName];
         }
 
-        // Fetch permissions assigned to user's role
+        // Fetch permissions assigned across primary roleId AND any multi-assigned roles by name
+        const roleConditions = [];
         if (membership.roleId) {
+          roleConditions.push(eq(roles.id, membership.roleId));
+        }
+        if (effectiveRoles.length > 0) {
+          roleConditions.push(
+            and(
+              inArray(roles.name, effectiveRoles),
+              or(eq(roles.tenantId, payload.tenantId), isNull(roles.tenantId)),
+            ),
+          );
+        }
+
+        if (roleConditions.length > 0) {
           const perms = await db
             .select({ code: permissions.code })
-            .from(rolePermissions)
+            .from(roles)
+            .innerJoin(rolePermissions, eq(rolePermissions.roleId, roles.id))
             .innerJoin(permissions, eq(permissions.id, rolePermissions.permissionId))
-            .where(eq(rolePermissions.roleId, membership.roleId));
+            .where(roleConditions.length === 1 ? roleConditions[0] : or(...roleConditions));
 
           for (const p of perms) {
             effectivePermissions.add(p.code);

@@ -1,5 +1,5 @@
 // Business Owner Service: Team management, invitations, user activation status, roles and RBAC permissions.
-import { and, desc, eq, ilike, inArray, isNull, or, sql } from "drizzle-orm";
+import { and, desc, eq, ilike, inArray, isNull, ne, or, sql } from "drizzle-orm";
 import { randomBytes } from "crypto";
 import { db } from "../../db";
 import {
@@ -18,9 +18,11 @@ import { Errors } from "../../lib/errors";
 import { hashToken } from "../../lib/jwt";
 import type {
   AssignRolePermissionsInput,
+  AssignUserRolesInput,
   CreateRoleInput,
   InviteMemberInput,
   TeamMembersQuery,
+  UpdateRoleInput,
   UpdateUserStatusInput,
 } from "./businessOwner.model";
 
@@ -496,5 +498,279 @@ export async function assignRolePermissions(
     message: `Permissions updated for role '${targetRole.name}'.`,
     roleId,
     assignedPermissions: resolvedPerms.map((p) => p.code),
+  };
+}
+
+// 1. GET /api/v1/permissions — Matrix screen ke liye saare permissions + grouped by module
+export async function listPermissionsCatalog() {
+  await ensureStandardPermissions(db);
+
+  const allPerms = await db
+    .select({
+      id: permissions.id,
+      code: permissions.code,
+      moduleCode: permissions.moduleCode,
+      description: permissions.description,
+    })
+    .from(permissions)
+    .orderBy(permissions.moduleCode, permissions.code);
+
+  const groupedByModule: Record<string, typeof allPerms> = {};
+  for (const perm of allPerms) {
+    if (!groupedByModule[perm.moduleCode]) {
+      groupedByModule[perm.moduleCode] = [];
+    }
+    groupedByModule[perm.moduleCode].push(perm);
+  }
+
+  return {
+    permissions: allPerms,
+    groupedByModule,
+  };
+}
+
+// 2. PUT /api/v1/users/:id/roles — Joined user ka role badalna ya multiple roles assign karna
+export async function assignUserRoles(
+  tenantId: string,
+  actorUserId: string,
+  targetUserId: string,
+  input: AssignUserRolesInput,
+  requestId?: string,
+) {
+  const [membership] = await db
+    .select()
+    .from(tenantMemberships)
+    .where(
+      and(
+        eq(tenantMemberships.tenantId, tenantId),
+        eq(tenantMemberships.userId, targetUserId),
+      ),
+    )
+    .limit(1);
+
+  if (!membership) {
+    throw Errors.notFound("User membership not found in your company.");
+  }
+
+  if (membership.roleName === "OWNER") {
+    throw Errors.forbidden("Company Owner role cannot be reassigned here.");
+  }
+
+  const uniqueRoleIds = Array.from(new Set(input.roleIds));
+  const resolvedRoles = await db
+    .select()
+    .from(roles)
+    .where(
+      and(
+        inArray(roles.id, uniqueRoleIds),
+        or(eq(roles.tenantId, tenantId), isNull(roles.tenantId)),
+      ),
+    );
+
+  if (resolvedRoles.length !== uniqueRoleIds.length) {
+    throw Errors.badRequest("One or more specified roles do not belong to your company.");
+  }
+
+  const primaryRole = resolvedRoles[0];
+  const assignedRoleNames = Array.from(new Set(resolvedRoles.map((r) => r.name)));
+
+  await db.transaction(async (tx) => {
+    await tx
+      .update(tenantMemberships)
+      .set({
+        roleId: primaryRole.id,
+        roleName: primaryRole.name,
+        updatedAt: new Date(),
+      })
+      .where(eq(tenantMemberships.id, membership.id));
+
+    await tx
+      .update(users)
+      .set({
+        roles: assignedRoleNames,
+        updatedAt: new Date(),
+      })
+      .where(eq(users.id, targetUserId));
+
+    await writeAudit(tx, {
+      tenantId,
+      actorUserId,
+      action: "AUTH.USERS.ROLES_UPDATE",
+      entityType: "user",
+      entityId: targetUserId,
+      beforeData: { roleId: membership.roleId, roleName: membership.roleName },
+      afterData: { primaryRoleId: primaryRole.id, assignedRoles: assignedRoleNames },
+      requestId,
+    });
+  });
+
+  return {
+    success: true,
+    userId: targetUserId,
+    primaryRoleId: primaryRole.id,
+    assignedRoles: assignedRoleNames,
+    message: "User roles updated successfully.",
+  };
+}
+
+// 3. PATCH /api/v1/roles/:id — Custom role ka naam ya description edit karna
+export async function updateCustomRole(
+  tenantId: string,
+  actorUserId: string,
+  roleId: string,
+  input: UpdateRoleInput,
+  requestId?: string,
+) {
+  const [targetRole] = await db
+    .select()
+    .from(roles)
+    .where(
+      and(
+        eq(roles.id, roleId),
+        or(eq(roles.tenantId, tenantId), isNull(roles.tenantId)),
+      ),
+    )
+    .limit(1);
+
+  if (!targetRole) {
+    throw Errors.notFound("Role not found in your company.");
+  }
+
+  if (targetRole.isSystem) {
+    throw Errors.forbidden("System predefined roles cannot be edited.");
+  }
+
+  if (input.name && input.name !== targetRole.name) {
+    const [dup] = await db
+      .select({ id: roles.id })
+      .from(roles)
+      .where(
+        and(
+          or(eq(roles.tenantId, tenantId), isNull(roles.tenantId)),
+          eq(roles.name, input.name),
+          ne(roles.id, roleId),
+        ),
+      )
+      .limit(1);
+
+    if (dup) {
+      throw Errors.conflict(`Another role named '${input.name}' already exists.`);
+    }
+  }
+
+  const updated = await db.transaction(async (tx) => {
+    const [row] = await tx
+      .update(roles)
+      .set({
+        ...(input.name !== undefined && { name: input.name }),
+        ...(input.description !== undefined && { description: input.description }),
+        updatedAt: new Date(),
+      })
+      .where(and(eq(roles.id, roleId), eq(roles.tenantId, tenantId)))
+      .returning();
+
+    if (input.name && input.name !== targetRole.name) {
+      await tx
+        .update(tenantMemberships)
+        .set({ roleName: input.name, updatedAt: new Date() })
+        .where(
+          and(
+            eq(tenantMemberships.tenantId, tenantId),
+            eq(tenantMemberships.roleId, roleId),
+          ),
+        );
+    }
+
+    await writeAudit(tx, {
+      tenantId,
+      actorUserId,
+      action: "AUTH.ROLES.UPDATE",
+      entityType: "role",
+      entityId: roleId,
+      beforeData: { name: targetRole.name, description: targetRole.description },
+      afterData: { name: row.name, description: row.description },
+      requestId,
+    });
+
+    return row;
+  });
+
+  return {
+    role: updated,
+    message: "Custom role updated successfully.",
+  };
+}
+
+// 4. DELETE /api/v1/roles/:id — Unused custom role delete karna
+export async function deleteCustomRole(
+  tenantId: string,
+  actorUserId: string,
+  roleId: string,
+  requestId?: string,
+) {
+  const [targetRole] = await db
+    .select()
+    .from(roles)
+    .where(
+      and(
+        eq(roles.id, roleId),
+        or(eq(roles.tenantId, tenantId), isNull(roles.tenantId)),
+      ),
+    )
+    .limit(1);
+
+  if (!targetRole) {
+    throw Errors.notFound("Role not found in your company.");
+  }
+
+  if (targetRole.isSystem) {
+    throw Errors.forbidden("System predefined roles cannot be deleted.");
+  }
+
+  const [[activeMembers], [pendingInvites]] = await Promise.all([
+    db
+      .select({ count: sql<number>`count(*)::int` })
+      .from(tenantMemberships)
+      .where(
+        and(
+          eq(tenantMemberships.tenantId, tenantId),
+          eq(tenantMemberships.roleId, roleId),
+        ),
+      ),
+    db
+      .select({ count: sql<number>`count(*)::int` })
+      .from(userInvitations)
+      .where(
+        and(
+          eq(userInvitations.tenantId, tenantId),
+          eq(userInvitations.roleId, roleId),
+          eq(userInvitations.status, "PENDING"),
+        ),
+      ),
+  ]);
+
+  if ((activeMembers?.count ?? 0) > 0 || (pendingInvites?.count ?? 0) > 0) {
+    throw Errors.conflict(
+      "Role is currently assigned to team members or pending invitations. Reassign users before deleting.",
+    );
+  }
+
+  await db.transaction(async (tx) => {
+    await tx.delete(roles).where(and(eq(roles.id, roleId), eq(roles.tenantId, tenantId)));
+
+    await writeAudit(tx, {
+      tenantId,
+      actorUserId,
+      action: "AUTH.ROLES.DELETE",
+      entityType: "role",
+      entityId: roleId,
+      beforeData: { name: targetRole.name, description: targetRole.description },
+      requestId,
+    });
+  });
+
+  return {
+    success: true,
+    message: `Custom role '${targetRole.name}' deleted successfully.`,
   };
 }

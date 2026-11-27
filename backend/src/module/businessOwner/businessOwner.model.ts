@@ -49,8 +49,22 @@ export const assignRolePermissionsSchema = z.object({
     .min(1, "Kam se kam 1 permission select karein"),
 });
 
+export const assignUserRolesSchema = z.object({
+  roleIds: z
+    .array(z.string().uuid("Valid Role ID (UUID) dalein"))
+    .min(1, "Kam se kam 1 role select karein"),
+});
+
+export const updateRoleSchema = createRoleSchema
+  .partial()
+  .refine((d) => d.name !== undefined || d.description !== undefined, {
+    message: "Kam se kam role name ya description dalein",
+  });
+
 export type TeamMembersQuery = z.infer<typeof teamMembersQuerySchema>;
 export type InviteMemberInput = z.infer<typeof inviteMemberSchema>;
 export type UpdateUserStatusInput = z.infer<typeof updateUserStatusSchema>;
 export type CreateRoleInput = z.infer<typeof createRoleSchema>;
 export type AssignRolePermissionsInput = z.infer<typeof assignRolePermissionsSchema>;
+export type AssignUserRolesInput = z.infer<typeof assignUserRolesSchema>;
+export type UpdateRoleInput = z.infer<typeof updateRoleSchema>;

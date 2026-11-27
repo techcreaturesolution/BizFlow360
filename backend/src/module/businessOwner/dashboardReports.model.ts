@@ -2,8 +2,15 @@
 import { z } from "zod";
 import { EXPORT_FORMATS, EXPORT_REPORT_TYPES } from "../../db/schema";
 
+const periodField = z
+  .string()
+  .trim()
+  .toUpperCase()
+  .pipe(z.enum(["TODAY", "7D", "30D", "90D", "YTD", "CUSTOM"]))
+  .default("30D");
+
 export const dashboardSummaryQuerySchema = z.object({
-  period: z.enum(["TODAY", "7D", "30D", "90D", "YTD", "CUSTOM"]).default("30D"),
+  period: periodField,
   from: z.string().optional(),
   to: z.string().optional(),
   branch_id: z.string().uuid().optional(),
@@ -16,7 +23,7 @@ export const dashboardSummaryQuerySchema = z.object({
 });
 
 export const analyticsQuerySchema = z.object({
-  period: z.enum(["TODAY", "7D", "30D", "90D", "YTD", "CUSTOM"]).default("30D"),
+  period: periodField,
   from: z.string().optional(),
   to: z.string().optional(),
   branch_id: z.string().uuid().optional(),

@@ -38,10 +38,11 @@ export const STANDARD_PERMISSIONS = [
   { code: "BILLING.SUBSCRIPTION.VIEW", moduleCode: "BILLING", description: "View available plans, current subscription, invoices, and usage" },
   { code: "BILLING.SUBSCRIPTION.MANAGE", moduleCode: "BILLING", description: "Start checkout, change plans, and cancel subscription" },
 
-  // Approvals & Notifications
+  // Notifications & Audit
   { code: "APPROVALS.INBOX.VIEW", moduleCode: "APPROVALS", description: "View pending quotation, expense, and purchase approval queue" },
   { code: "APPROVALS.INBOX.DECIDE", moduleCode: "APPROVALS", description: "Approve or reject pending approval requests" },
   { code: "NOTIFICATIONS.ALERTS.VIEW", moduleCode: "NOTIFICATIONS", description: "View in-app notifications and manage alert preferences" },
+  { code: "AUDIT.LOGS.VIEW", moduleCode: "AUDIT", description: "View company-level audit trail logs" },
 
   // CRM
   { code: "CRM.LEADS.VIEW", moduleCode: "CRM", description: "View assigned CRM leads" },
@@ -150,11 +151,14 @@ export async function initializeTenantDefaults(
     })
     .returning();
 
-  // 5. Assign default permissions to ADMIN and MEMBER
+  // 5. Assign default permissions to ADMIN (excluding BILLING & FINANCE unless Owner grants them) and MEMBER
   const allPerms = await executor.select().from(permissions);
-  if (adminRole && allPerms.length > 0) {
+  const adminDefaultPerms = allPerms.filter(
+    (p) => p.moduleCode !== "BILLING" && p.moduleCode !== "FINANCE",
+  );
+  if (adminRole && adminDefaultPerms.length > 0) {
     await executor.insert(rolePermissions).values(
-      allPerms.map((p) => ({
+      adminDefaultPerms.map((p) => ({
         roleId: adminRole.id,
         permissionId: p.id,
       })),

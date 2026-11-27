@@ -32,11 +32,17 @@ export async function getTeamMembers(tenantId: string, query: TeamMembersQuery) 
   if (query.status) {
     conditions.push(eq(tenantMemberships.status, query.status));
   }
-  if (query.branch) {
-    conditions.push(eq(tenantMemberships.branchId, query.branch));
+  const effectiveRoleId = query.roleId ?? query.role_id;
+  if (effectiveRoleId) {
+    conditions.push(eq(tenantMemberships.roleId, effectiveRoleId));
   }
-  if (query.department) {
-    conditions.push(eq(tenantMemberships.departmentId, query.department));
+  const effectiveBranch = query.branch ?? query.branch_id;
+  if (effectiveBranch) {
+    conditions.push(eq(tenantMemberships.branchId, effectiveBranch));
+  }
+  const effectiveDept = query.department ?? query.department_id;
+  if (effectiveDept) {
+    conditions.push(eq(tenantMemberships.departmentId, effectiveDept));
   }
 
   const offset = (query.page - 1) * query.limit;
@@ -136,51 +142,68 @@ export async function inviteTeamMember(
     }
   }
 
-  // Quota check: seats used
-  const [metrics] = await db
-    .select()
-    .from(usageMetrics)
-    .where(eq(usageMetrics.tenantId, tenantId))
-    .limit(1);
+  // Seat Quota check: active seats + pending invitations vs plan max_seats
+  const [[metrics], [entitlement], [activeMembersRow], [pendingInvitesRow]] = await Promise.all([
+    db.select().from(usageMetrics).where(eq(usageMetrics.tenantId, tenantId)).limit(1),
+    db
+      .select()
+      .from(tenantEntitlements)
+      .where(
+        and(
+          eq(tenantEntitlements.tenantId, tenantId),
+          eq(tenantEntitlements.moduleCode, "CRM"),
+        ),
+      )
+      .limit(1),
+    db
+      .select({ count: sql<number>`count(*)::int` })
+      .from(tenantMemberships)
+      .where(and(eq(tenantMemberships.tenantId, tenantId), eq(tenantMemberships.status, "ACTIVE"))),
+    db
+      .select({ count: sql<number>`count(*)::int` })
+      .from(userInvitations)
+      .where(and(eq(userInvitations.tenantId, tenantId), eq(userInvitations.status, "PENDING"))),
+  ]);
 
-  const [entitlement] = await db
-    .select()
-    .from(tenantEntitlements)
-    .where(
-      and(
-        eq(tenantEntitlements.tenantId, tenantId),
-        eq(tenantEntitlements.moduleCode, "CRM"), // Base seat check
-      ),
-    )
-    .limit(1);
+  const maxSeats = entitlement?.quotas?.max_seats ?? 10;
+  const currentSeatsUsed = Math.max(metrics?.seatsUsed ?? 1, activeMembersRow?.count ?? 1);
+  const totalOccupied = currentSeatsUsed + (pendingInvitesRow?.count ?? 0);
 
-  if (metrics && entitlement) {
-    const maxSeats = entitlement.quotas?.max_seats ?? 10;
-    if (metrics.seatsUsed >= maxSeats) {
-      throw Errors.forbidden(
-        `Team seat limit reached (${metrics.seatsUsed}/${maxSeats}). Please upgrade your plan to invite more members.`,
-      );
-    }
+  if (totalOccupied >= maxSeats) {
+    throw Errors.forbidden(
+      `Team seat quota exceeded (${currentSeatsUsed} active + ${pendingInvitesRow?.count ?? 0} pending / ${maxSeats} max seats). Please revoke unused invites or upgrade your plan.`,
+    );
   }
 
-  // Validate custom role if provided
+  // Resolve single or multiple role IDs & enforce tenant isolation + role escalation guard
+  const requestedRoleIds = Array.from(
+    new Set([...(input.roleIds ?? []), ...(input.roleId ? [input.roleId] : [])]),
+  );
+
+  let primaryRoleId: string | null = null;
   let assignedRoleName = "MEMBER";
-  if (input.roleId) {
-    const [roleRow] = await db
+
+  if (requestedRoleIds.length > 0) {
+    const resolvedRoles = await db
       .select()
       .from(roles)
       .where(
         and(
-          eq(roles.id, input.roleId),
+          inArray(roles.id, requestedRoleIds),
           or(eq(roles.tenantId, tenantId), isNull(roles.tenantId)),
         ),
-      )
-      .limit(1);
+      );
 
-    if (!roleRow) {
-      throw Errors.notFound("Selected role not found.");
+    if (resolvedRoles.length !== requestedRoleIds.length) {
+      throw Errors.notFound("One or more specified roles do not belong to your company.");
     }
-    assignedRoleName = roleRow.name;
+
+    if (resolvedRoles.some((r) => r.name === "OWNER" || r.name === "SUPER_ADMIN")) {
+      throw Errors.forbidden("Role escalation blocked: cannot invite users with OWNER or SUPER_ADMIN privileges.");
+    }
+
+    primaryRoleId = resolvedRoles[0].id;
+    assignedRoleName = resolvedRoles.map((r) => r.name).join(", ");
   }
 
   const rawToken = randomBytes(32).toString("hex");
@@ -193,7 +216,8 @@ export async function inviteTeamMember(
       tenantId,
       email: input.email,
       fullName: input.fullName,
-      roleId: input.roleId ?? null,
+      roleId: primaryRoleId,
+      roleIds: requestedRoleIds,
       branchId: input.branchId ?? null,
       departmentId: input.departmentId ?? null,
       tokenHash,
@@ -214,6 +238,7 @@ export async function inviteTeamMember(
       email: input.email,
       fullName: input.fullName,
       roleName: assignedRoleName,
+      roleIds: requestedRoleIds,
       branchId: input.branchId,
       departmentId: input.departmentId,
     },
@@ -226,12 +251,66 @@ export async function inviteTeamMember(
       email: invitation.email,
       fullName: invitation.fullName,
       roleName: assignedRoleName,
+      roleIds: requestedRoleIds,
       status: invitation.status,
       expiresAt: invitation.expiresAt,
       inviteLink: `https://bizflow360.com/accept-invite?token=${rawToken}`,
+      acceptToken: rawToken,
     },
     message: "Team member invitation created successfully.",
   };
+}
+
+export async function listPendingInvitations(tenantId: string) {
+  const rows = await db
+    .select()
+    .from(userInvitations)
+    .where(eq(userInvitations.tenantId, tenantId))
+    .orderBy(desc(userInvitations.createdAt))
+    .limit(50);
+
+  return { invitations: rows };
+}
+
+export async function revokeInvitation(
+  tenantId: string,
+  actorUserId: string,
+  invitationId: string,
+  requestId?: string,
+) {
+  const [inv] = await db
+    .select()
+    .from(userInvitations)
+    .where(and(eq(userInvitations.id, invitationId), eq(userInvitations.tenantId, tenantId)))
+    .limit(1);
+
+  if (!inv) {
+    throw Errors.notFound("Invitation not found in your company.");
+  }
+
+  if (inv.status !== "PENDING") {
+    throw Errors.conflict(`Invitation cannot be revoked because it is already ${inv.status}.`);
+  }
+
+  await db.transaction(async (tx) => {
+    await tx
+      .update(userInvitations)
+      .set({ status: "REVOKED", updatedAt: new Date() })
+      .where(eq(userInvitations.id, invitationId));
+
+    await writeAudit(tx, {
+      tenantId,
+      actorUserId,
+      action: "AUTH.INVITATION.REVOKE",
+      entityType: "user_invitation",
+      entityId: invitationId,
+      beforeData: { status: inv.status, email: inv.email },
+      afterData: { status: "REVOKED" },
+      requestId,
+    });
+  });
+
+  return { success: true, message: `Invitation for ${inv.email} has been revoked.` };
 }
 
 export async function updateUserStatus(
@@ -296,6 +375,7 @@ export async function updateUserStatus(
       afterData: {
         newStatus,
       },
+      reason: input.reason,
       requestId,
     });
   });
@@ -359,12 +439,27 @@ export async function getRoles(tenantId: string) {
       .orderBy(permissions.moduleCode, permissions.code);
   }
 
+  // Fetch user count per roleId
+  const roleCountRows = await db
+    .select({
+      roleId: tenantMemberships.roleId,
+      count: sql<number>`count(*)::int`,
+    })
+    .from(tenantMemberships)
+    .where(eq(tenantMemberships.tenantId, tenantId))
+    .groupBy(tenantMemberships.roleId);
+
+  const countByRoleId = new Map(
+    roleCountRows.filter((rc) => rc.roleId).map((rc) => [rc.roleId!, rc.count]),
+  );
+
   return {
     roles: roleRows.map((r) => ({
       id: r.id,
       name: r.name,
       description: r.description,
       isSystem: r.isSystem,
+      usersCount: countByRoleId.get(r.id) ?? 0,
       permissions: permissionsByRoleId[r.id] ?? [],
     })),
     availablePermissions: allAvailablePermissions,
@@ -377,6 +472,11 @@ export async function createCustomRole(
   input: CreateRoleInput,
   requestId?: string,
 ) {
+  const upperName = input.name.toUpperCase();
+  if (upperName === "SUPER_ADMIN" || upperName === "OWNER" || upperName === "PLATFORM_ADMIN") {
+    throw Errors.forbidden(`Role escalation blocked: '${input.name}' is a reserved system role name.`);
+  }
+
   const [existing] = await db
     .select({ id: roles.id })
     .from(roles)
@@ -392,29 +492,74 @@ export async function createCustomRole(
     throw Errors.conflict(`A role named '${input.name}' already exists.`);
   }
 
-  const [newRole] = await db
-    .insert(roles)
-    .values({
-      tenantId,
-      name: input.name,
-      description: input.description ?? null,
-      isSystem: false,
-    })
-    .returning();
+  await ensureStandardPermissions(db);
 
-  await writeAudit(db, {
-    tenantId,
-    actorUserId,
-    action: "AUTH.ROLES.CREATE",
-    entityType: "role",
-    entityId: newRole.id,
-    afterData: { name: newRole.name, description: newRole.description },
-    requestId,
+  // Optional initial permissions resolution + escalation check
+  let resolvedPerms: Array<{ id: string; code: string }> = [];
+  if (input.permissionIds && input.permissionIds.length > 0) {
+    const isUuid = (val: string) => /^[0-9a-fA-F-]{36}$/.test(val);
+    const uuidList = input.permissionIds.filter(isUuid);
+    const codeList = input.permissionIds.filter((p) => !isUuid(p));
+
+    const permFilters = [];
+    if (uuidList.length > 0) permFilters.push(inArray(permissions.id, uuidList));
+    if (codeList.length > 0) permFilters.push(inArray(permissions.code, codeList));
+
+    if (permFilters.length > 0) {
+      resolvedPerms = await db
+        .select({ id: permissions.id, code: permissions.code })
+        .from(permissions)
+        .where(permFilters.length === 1 ? permFilters[0] : or(...permFilters));
+    }
+
+    if (resolvedPerms.some((p) => p.code.startsWith("PLATFORM.") || p.code.startsWith("SUPER_ADMIN"))) {
+      throw Errors.forbidden("Role escalation blocked: Super Admin permissions cannot be assigned.");
+    }
+  }
+
+  const newRole = await db.transaction(async (tx) => {
+    const [created] = await tx
+      .insert(roles)
+      .values({
+        tenantId,
+        name: input.name,
+        description: input.description ?? null,
+        isSystem: false,
+      })
+      .returning();
+
+    if (resolvedPerms.length > 0) {
+      await tx.insert(rolePermissions).values(
+        resolvedPerms.map((p) => ({
+          roleId: created.id,
+          permissionId: p.id,
+        })),
+      );
+    }
+
+    await writeAudit(tx, {
+      tenantId,
+      actorUserId,
+      action: "AUTH.ROLES.CREATE",
+      entityType: "role",
+      entityId: created.id,
+      afterData: {
+        name: created.name,
+        description: created.description,
+        permissions: resolvedPerms.map((p) => p.code),
+      },
+      requestId,
+    });
+
+    return created;
   });
 
   return {
-    role: newRole,
-    message: "Custom role created successfully. You can now assign permissions to it.",
+    role: {
+      ...newRole,
+      permissions: resolvedPerms.map((p) => p.code),
+    },
+    message: "Custom role created successfully.",
   };
 }
 
@@ -467,6 +612,10 @@ export async function assignRolePermissions(
     throw Errors.badRequest("None of the specified permissions were found in the system catalog.");
   }
 
+  if (resolvedPerms.some((p) => p.code.startsWith("PLATFORM.") || p.code.startsWith("SUPER_ADMIN"))) {
+    throw Errors.forbidden("Role escalation blocked: Super Admin permissions cannot be assigned.");
+  }
+
   await db.transaction(async (tx) => {
     // Delete existing permissions for this role
     await tx.delete(rolePermissions).where(eq(rolePermissions.roleId, roleId));
@@ -515,8 +664,21 @@ export async function listPermissionsCatalog() {
     .from(permissions)
     .orderBy(permissions.moduleCode, permissions.code);
 
-  const groupedByModule: Record<string, typeof allPerms> = {};
-  for (const perm of allPerms) {
+  const enriched = allPerms.map((p) => {
+    const parts = p.code.split(".");
+    return {
+      id: p.id,
+      code: p.code,
+      module: parts[0] ?? p.moduleCode,
+      resource: parts[1] ?? "GENERAL",
+      action: parts[2] ?? "ACCESS",
+      moduleCode: p.moduleCode,
+      description: p.description,
+    };
+  });
+
+  const groupedByModule: Record<string, typeof enriched> = {};
+  for (const perm of enriched) {
     if (!groupedByModule[perm.moduleCode]) {
       groupedByModule[perm.moduleCode] = [];
     }
@@ -524,7 +686,7 @@ export async function listPermissionsCatalog() {
   }
 
   return {
-    permissions: allPerms,
+    permissions: enriched,
     groupedByModule,
   };
 }
@@ -569,6 +731,10 @@ export async function assignUserRoles(
 
   if (resolvedRoles.length !== uniqueRoleIds.length) {
     throw Errors.badRequest("One or more specified roles do not belong to your company.");
+  }
+
+  if (resolvedRoles.some((r) => r.name === "OWNER" || r.name === "SUPER_ADMIN")) {
+    throw Errors.forbidden("Role escalation blocked: OWNER or SUPER_ADMIN roles cannot be assigned here.");
   }
 
   const primaryRole = resolvedRoles[0];

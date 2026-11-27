@@ -34,12 +34,19 @@ export const notificationsQuerySchema = z.object({
     .enum(["true", "false"])
     .transform((v) => v === "true")
     .optional(),
+  unread_only: z
+    .enum(["true", "false"])
+    .transform((v) => v === "true")
+    .optional(),
+  channel: z.enum(["IN_APP", "EMAIL"]).optional(),
   category: z.enum(NOTIFICATION_CATEGORIES).optional(),
   page: z.coerce.number().int().min(1).default(1),
   limit: z.coerce.number().int().min(1).max(100).default(20),
 });
 
 export const updateNotificationPreferencesSchema = z.object({
+  emailEnabled: z.boolean().optional(),
+  inAppEnabled: z.boolean().optional(),
   emailApprovals: z.boolean().optional(),
   emailBilling: z.boolean().optional(),
   emailTeamUpdates: z.boolean().optional(),
@@ -50,7 +57,20 @@ export const updateNotificationPreferencesSchema = z.object({
   inAppTasks: z.boolean().optional(),
 });
 
+export const tenantAuditLogsQuerySchema = z.object({
+  actor_user_id: z.string().uuid().optional(),
+  actorUserId: z.string().uuid().optional(),
+  action: z.string().trim().optional(),
+  entity_type: z.string().trim().optional(),
+  entityType: z.string().trim().optional(),
+  from: z.string().optional(),
+  to: z.string().optional(),
+  page: z.coerce.number().int().min(1).default(1),
+  limit: z.coerce.number().int().min(1).max(100).default(20),
+});
+
 export type ApprovalInboxQuery = z.infer<typeof approvalInboxQuerySchema>;
 export type ApprovalDecisionInput = z.infer<typeof approveDecisionSchema>;
 export type NotificationsQuery = z.infer<typeof notificationsQuerySchema>;
 export type UpdateNotificationPreferencesInput = z.infer<typeof updateNotificationPreferencesSchema>;
+export type TenantAuditLogsQuery = z.infer<typeof tenantAuditLogsQuerySchema>;

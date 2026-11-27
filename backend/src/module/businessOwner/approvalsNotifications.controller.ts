@@ -7,6 +7,7 @@ import {
   approveDecisionSchema,
   notificationsQuerySchema,
   rejectDecisionSchema,
+  tenantAuditLogsQuerySchema,
   updateNotificationPreferencesSchema,
 } from "./approvalsNotifications.model";
 import {
@@ -14,6 +15,7 @@ import {
   getApprovalInbox,
   getNotificationPreferences,
   listNotifications,
+  listTenantAuditLogs,
   markAllNotificationsRead,
   markNotificationRead,
   updateNotificationPreferences,
@@ -109,5 +111,12 @@ export const updateNotificationPreferencesHandler: RequestHandler = async (req, 
   const userId = requireUserId(req);
   const input = updateNotificationPreferencesSchema.parse(req.body);
   const result = await updateNotificationPreferences(tenantId, userId, input, req.requestId);
+  return sendSuccess(res, result);
+};
+
+export const listTenantAuditLogsHandler: RequestHandler = async (req, res) => {
+  const tenantId = requireTenantId(req);
+  const query = tenantAuditLogsQuerySchema.parse(req.query);
+  const result = await listTenantAuditLogs(tenantId, query);
   return sendSuccess(res, result);
 };

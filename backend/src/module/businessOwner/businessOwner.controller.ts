@@ -19,7 +19,9 @@ import {
   getRoles,
   getTeamMembers,
   inviteTeamMember,
+  listPendingInvitations,
   listPermissionsCatalog,
+  revokeInvitation,
   updateCustomRole,
   updateUserStatus,
 } from "./businessOwner.service";
@@ -116,5 +118,19 @@ export const deleteRoleHandler: RequestHandler = async (req, res) => {
   const actorUserId = requireUserId(req);
   const roleId = req.params.id as string;
   const result = await deleteCustomRole(tenantId, actorUserId, roleId, req.requestId);
+  return sendSuccess(res, result);
+};
+
+export const listPendingInvitationsHandler: RequestHandler = async (req, res) => {
+  const tenantId = requireTenantId(req);
+  const result = await listPendingInvitations(tenantId);
+  return sendSuccess(res, result);
+};
+
+export const revokeInvitationHandler: RequestHandler = async (req, res) => {
+  const tenantId = requireTenantId(req);
+  const actorUserId = requireUserId(req);
+  const invitationId = req.params.id as string;
+  const result = await revokeInvitation(tenantId, actorUserId, invitationId, req.requestId);
   return sendSuccess(res, result);
 };

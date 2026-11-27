@@ -3,6 +3,7 @@ import { Router } from "express";
 import { jwtAuthGuard } from "../../middlewares/guards";
 import { authLimiter } from "../../middlewares/rateLimiter";
 import {
+  acceptInvitationHandler,
   forgotPasswordHandler,
   loginHandler,
   logoutHandler,
@@ -20,6 +21,7 @@ router.post("/logout", logoutHandler);
 router.post("/refresh", refreshHandler);
 router.post("/forgot-password", authLimiter, forgotPasswordHandler);
 router.post("/reset-password", authLimiter, resetPasswordHandler);
+router.post("/invitations/accept", authLimiter, acceptInvitationHandler);
 router.get("/me", jwtAuthGuard, meHandler);
 
 export default router;

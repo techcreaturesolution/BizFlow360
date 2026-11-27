@@ -175,14 +175,15 @@ export function entitlementGuard(moduleCode: ModuleCode | string) {
       )
       .limit(1);
 
-    // AUTH, ORG, REPORTS, BILLING, APPROVALS and NOTIFICATIONS are core workspace modules unless explicitly disabled
+    // AUTH, ORG, REPORTS, BILLING, APPROVALS, NOTIFICATIONS and AUDIT are core workspace modules unless explicitly disabled
     if (
       moduleCode === "AUTH" ||
       moduleCode === "ORG" ||
       moduleCode === "REPORTS" ||
       moduleCode === "BILLING" ||
       moduleCode === "APPROVALS" ||
-      moduleCode === "NOTIFICATIONS"
+      moduleCode === "NOTIFICATIONS" ||
+      moduleCode === "AUDIT"
     ) {
       if (entitlement && !entitlement.isEnabled) {
         return next(

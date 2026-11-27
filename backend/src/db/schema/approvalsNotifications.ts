@@ -37,6 +37,8 @@ export const NOTIFICATION_CATEGORIES = [
 export type NotificationCategory = (typeof NOTIFICATION_CATEGORIES)[number];
 
 export interface NotificationPreferencesConfig {
+  emailEnabled: boolean;
+  inAppEnabled: boolean;
   emailApprovals: boolean;
   emailBilling: boolean;
   emailTeamUpdates: boolean;
@@ -48,6 +50,8 @@ export interface NotificationPreferencesConfig {
 }
 
 export const DEFAULT_NOTIFICATION_PREFERENCES: NotificationPreferencesConfig = {
+  emailEnabled: true,
+  inAppEnabled: true,
   emailApprovals: true,
   emailBilling: true,
   emailTeamUpdates: true,

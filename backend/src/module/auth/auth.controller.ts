@@ -3,6 +3,7 @@ import type { RequestHandler } from "express";
 import { Errors } from "../../lib/errors";
 import { sendSuccess } from "../../lib/response";
 import {
+  acceptInvitation,
   forgotPassword,
   getMe,
   loginUser,
@@ -12,6 +13,7 @@ import {
   rotateRefreshToken,
 } from "./auth.service";
 import {
+  acceptInvitationSchema,
   forgotPasswordSchema,
   loginSchema,
   logoutSchema,
@@ -54,6 +56,12 @@ export const resetPasswordHandler: RequestHandler = async (req, res) => {
   const input = resetPasswordSchema.parse(req.body);
   const result = await resetPassword(input, req.requestId);
   return sendSuccess(res, result);
+};
+
+export const acceptInvitationHandler: RequestHandler = async (req, res) => {
+  const input = acceptInvitationSchema.parse(req.body);
+  const result = await acceptInvitation(input, req.requestId);
+  return sendSuccess(res, result, { status: 201 });
 };
 
 export const meHandler: RequestHandler = async (req, res) => {

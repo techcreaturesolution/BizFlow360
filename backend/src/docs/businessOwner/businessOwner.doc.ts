@@ -37,18 +37,25 @@ export const businessOwnerDoc = {
       },
     },
     "/api/v1/users/invitations": {
+      get: {
+        tags: ["[Business Owner] Team & RBAC"],
+        summary: "List company team invitations",
+        description: "Lists pending, accepted, expired, and revoked invitations for the company.",
+        security: [{ bearerAuth: [] }],
+        responses: { "200": { description: "Invitations list" } },
+      },
       post: {
         tags: ["[Business Owner] Team & RBAC"],
         summary: "Invite a new team member",
         description:
-          "Sends an invitation with a unique invitation token. Checks company seat quota and records an audit log. Protected by Idempotency-Key header.",
+          "Sends an invitation with a unique token. Enforces seat quota (active + pending vs max_seats), blocks role escalation, and records an audit log.",
         security: [{ bearerAuth: [] }],
         parameters: [
           {
             name: "Idempotency-Key",
             in: "header",
             schema: { type: "string" },
-            description: "Optional UUID/string to prevent duplicate invitation submissions",
+            description: "Optional key to prevent duplicate invitation submissions",
           },
         ],
         requestBody: {
@@ -69,8 +76,24 @@ export const businessOwnerDoc = {
             },
           },
           "400": { description: "Validation error" },
-          "403": { description: "Seat limit reached or missing permissions" },
+          "403": { description: "Seat quota limit reached or role escalation blocked" },
           "409": { description: "User is already an active member" },
+        },
+      },
+    },
+    "/api/v1/users/invitations/{id}": {
+      delete: {
+        tags: ["[Business Owner] Team & RBAC"],
+        summary: "Revoke a pending team invitation",
+        description: "Marks a pending invitation as REVOKED so the invite link can no longer be used, and records an audit log.",
+        security: [{ bearerAuth: [] }],
+        parameters: [
+          { name: "id", in: "path", required: true, schema: { type: "string", format: "uuid" } },
+        ],
+        responses: {
+          "200": { description: "Invitation revoked" },
+          "404": { description: "Invitation not found" },
+          "409": { description: "Invitation is not pending" },
         },
       },
     },

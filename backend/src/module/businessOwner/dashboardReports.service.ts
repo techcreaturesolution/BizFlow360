@@ -1,18 +1,24 @@
 // Dashboard & Reports Service: Overview KPIs, Module Analytics, Async Exports & Saved Widgets.
-import { and, desc, eq, sql } from "drizzle-orm";
+import { and, desc, eq, gte, isNull, lte, or, sql } from "drizzle-orm";
 import { db } from "../../db";
 import {
   auditLogs,
   branches,
+  crmLeads,
   dashboardWidgets,
   departments,
+  financeExpenses,
   reportExportJobs,
+  salesInvoices,
   subscriptionInvoices,
+  tasks,
   teams,
   tenantEntitlements,
   tenantMemberships,
   tenants,
   usageMetrics,
+  userInvitations,
+  users,
   type DashboardWidgetConfig,
 } from "../../db/schema";
 import { writeAudit } from "../../lib/audit";
@@ -77,11 +83,7 @@ export async function getDashboardSummary(tenantId: string, query: DashboardSumm
   const ownerUserId = query.owner_user_id ?? query.ownerUserId;
 
   const [tenant] = await db
-    .select({
-      defaultCurrency: tenants.defaultCurrency,
-      name: tenants.name,
-      status: tenants.status,
-    })
+    .select()
     .from(tenants)
     .where(eq(tenants.id, tenantId))
     .limit(1);
@@ -92,7 +94,7 @@ export async function getDashboardSummary(tenantId: string, query: DashboardSumm
 
   const currency = tenant.defaultCurrency.trim();
 
-  // Real organization & usage counts
+  // Real organization & user breakdown
   const membershipConditions = [eq(tenantMemberships.tenantId, tenantId)];
   if (branchId) membershipConditions.push(eq(tenantMemberships.branchId, branchId));
   if (departmentId) membershipConditions.push(eq(tenantMemberships.departmentId, departmentId));
@@ -100,18 +102,52 @@ export async function getDashboardSummary(tenantId: string, query: DashboardSumm
     membershipConditions.push(eq(tenantMemberships.status, query.status as "ACTIVE" | "INACTIVE"));
   }
 
-  const [[memberCount], [branchCount], [deptCount], [teamCount], [usage]] = await Promise.all([
-    db.select({ count: sql<number>`count(*)::int` }).from(tenantMemberships).where(and(...membershipConditions)),
-    db.select({ count: sql<number>`count(*)::int` }).from(branches).where(eq(branches.tenantId, tenantId)),
-    db.select({ count: sql<number>`count(*)::int` }).from(departments).where(eq(departments.tenantId, tenantId)),
-    db.select({ count: sql<number>`count(*)::int` }).from(teams).where(eq(teams.tenantId, tenantId)),
-    db.select().from(usageMetrics).where(eq(usageMetrics.tenantId, tenantId)).limit(1),
-  ]);
-
-  // Real enabled modules & recent audit activity
-  const [entitlements, recentActivities, overdueSubscriptionInvoices] = await Promise.all([
+  const [
+    allMemberships,
+    [pendingInvitesRow],
+    [activeBranchCount],
+    [activeDeptCount],
+    [activeTeamCount],
+    [usage],
+    entitlements,
+    recentAuditRows,
+    overdueSubscriptionInvoices,
+    leadRows,
+    invoiceStats,
+    expenseStats,
+    taskRows,
+  ] = await Promise.all([
     db
-      .select({ moduleCode: tenantEntitlements.moduleCode, isEnabled: tenantEntitlements.isEnabled })
+      .select({
+        status: tenantMemberships.status,
+        branchId: tenantMemberships.branchId,
+        departmentId: tenantMemberships.departmentId,
+      })
+      .from(tenantMemberships)
+      .where(and(...membershipConditions)),
+    db
+      .select({ count: sql<number>`count(*)::int` })
+      .from(userInvitations)
+      .where(and(eq(userInvitations.tenantId, tenantId), eq(userInvitations.status, "PENDING"))),
+    db
+      .select({ count: sql<number>`count(*)::int` })
+      .from(branches)
+      .where(and(eq(branches.tenantId, tenantId), eq(branches.status, "ACTIVE"))),
+    db
+      .select({ count: sql<number>`count(*)::int` })
+      .from(departments)
+      .where(and(eq(departments.tenantId, tenantId), eq(departments.status, "ACTIVE"))),
+    db
+      .select({ count: sql<number>`count(*)::int` })
+      .from(teams)
+      .where(and(eq(teams.tenantId, tenantId), eq(teams.status, "ACTIVE"))),
+    db.select().from(usageMetrics).where(eq(usageMetrics.tenantId, tenantId)).limit(1),
+    db
+      .select({
+        moduleCode: tenantEntitlements.moduleCode,
+        isEnabled: tenantEntitlements.isEnabled,
+        quotas: tenantEntitlements.quotas,
+      })
       .from(tenantEntitlements)
       .where(eq(tenantEntitlements.tenantId, tenantId)),
     db
@@ -119,10 +155,17 @@ export async function getDashboardSummary(tenantId: string, query: DashboardSumm
         id: auditLogs.id,
         action: auditLogs.action,
         entityType: auditLogs.entityType,
+        entityId: auditLogs.entityId,
         actorUserId: auditLogs.actorUserId,
+        actorName: users.fullName,
+        beforeData: auditLogs.beforeData,
+        afterData: auditLogs.afterData,
+        reason: auditLogs.reason,
+        requestId: auditLogs.requestId,
         createdAt: auditLogs.createdAt,
       })
       .from(auditLogs)
+      .leftJoin(users, eq(users.id, auditLogs.actorUserId))
       .where(eq(auditLogs.tenantId, tenantId))
       .orderBy(desc(auditLogs.createdAt))
       .limit(10),
@@ -138,14 +181,117 @@ export async function getDashboardSummary(tenantId: string, query: DashboardSumm
           eq(subscriptionInvoices.status, "OVERDUE"),
         ),
       ),
+    db
+      .select({
+        stage: crmLeads.stage,
+        estimatedValue: crmLeads.estimatedValue,
+      })
+      .from(crmLeads)
+      .where(
+        and(
+          eq(crmLeads.tenantId, tenantId),
+          gte(crmLeads.createdAt, range.start),
+          lte(crmLeads.createdAt, range.end),
+          ...(ownerUserId ? [eq(crmLeads.ownerUserId, ownerUserId)] : []),
+        ),
+      ),
+    db
+      .select({
+        invoiced: sql<string>`coalesce(sum(${salesInvoices.grandTotal}), '0.00')`,
+        collected: sql<string>`coalesce(sum(${salesInvoices.paidAmount}), '0.00')`,
+        balanceDue: sql<string>`coalesce(sum(${salesInvoices.balanceDue}), '0.00')`,
+      })
+      .from(salesInvoices)
+      .where(
+        and(
+          eq(salesInvoices.tenantId, tenantId),
+          gte(salesInvoices.createdAt, range.start),
+          lte(salesInvoices.createdAt, range.end),
+        ),
+      ),
+    db
+      .select({
+        status: financeExpenses.status,
+        amount: financeExpenses.amount,
+      })
+      .from(financeExpenses)
+      .where(
+        and(
+          eq(financeExpenses.tenantId, tenantId),
+          gte(financeExpenses.createdAt, range.start),
+          lte(financeExpenses.createdAt, range.end),
+        ),
+      ),
+    db
+      .select({
+        status: tasks.status,
+        dueAt: tasks.dueAt,
+      })
+      .from(tasks)
+      .where(
+        and(
+          eq(tasks.tenantId, tenantId),
+          ...(branchId ? [eq(tasks.branchId, branchId)] : []),
+          ...(departmentId ? [eq(tasks.departmentId, departmentId)] : []),
+        ),
+      ),
   ]);
+
+  const activeUsersCount = allMemberships.filter((m) => m.status === "ACTIVE").length;
+  const inactiveUsersCount = allMemberships.filter((m) => m.status !== "ACTIVE").length;
+  const unassignedUsersCount = allMemberships.filter(
+    (m) => m.status === "ACTIVE" && (!m.branchId || !m.departmentId),
+  ).length;
+  const pendingInvitationsCount = pendingInvitesRow?.count ?? 0;
+  const seatLimit = entitlements[0]?.quotas?.max_seats ?? 10;
+  const seatsUsed = Math.max(usage?.seatsUsed ?? 1, activeUsersCount);
+  const enabledModules = entitlements.filter((e) => e.isEnabled).map((e) => e.moduleCode);
+
+  const branchesCount = activeBranchCount?.count ?? 0;
+  const departmentsCount = activeDeptCount?.count ?? 0;
+  const teamsCount = activeTeamCount?.count ?? 0;
+
+  // Company Setup Progress Checklist
+  const setupChecklist = [
+    { key: "company_profile", label: "Company legal name & tax ID", completed: Boolean(tenant.legalName && tenant.taxId) },
+    { key: "company_logo", label: "Upload company logo", completed: Boolean(tenant.logoUrl || tenant.logoDocumentId) },
+    { key: "numbering_rules", label: "Configure invoice & quotation prefixes", completed: Boolean(tenant.numberingPreferences) },
+    { key: "branches_setup", label: "Add at least 1 branch", completed: branchesCount > 0 },
+    { key: "departments_setup", label: "Add at least 1 department", completed: departmentsCount > 0 },
+    { key: "team_invited", label: "Invite or add team members", completed: activeUsersCount > 1 || pendingInvitationsCount > 0 },
+  ];
+  const completedSteps = setupChecklist.filter((c) => c.completed).length;
+  const setupPercentage = Math.round((completedSteps / setupChecklist.length) * 100);
+
+  // Operational aggregates
+  const wonLeads = leadRows.filter((l) => l.stage === "WON");
+  const openLeads = leadRows.filter((l) => l.stage !== "WON" && l.stage !== "LOST");
+  const totalPipelineVal = openLeads.reduce((sum, l) => sum + Number(l.estimatedValue), 0);
+  const conversionRate =
+    leadRows.length > 0 ? Number(((wonLeads.length / leadRows.length) * 100).toFixed(1)) : 0;
+
+  const totalInvoiced = Number(invoiceStats[0]?.invoiced ?? 0);
+  const totalCollected = Number(invoiceStats[0]?.collected ?? 0);
+  const totalClientDue = Number(invoiceStats[0]?.balanceDue ?? 0);
+
+  const approvedExpenses = expenseStats.filter((e) => e.status === "APPROVED" || e.status === "PAID");
+  const pendingExpenses = expenseStats.filter((e) => e.status === "SUBMITTED");
+  const totalExpensesAmt = approvedExpenses.reduce((s, e) => s + Number(e.amount), 0);
+
+  const now = new Date();
+  const pendingTasksCount = taskRows.filter((t) => t.status === "TODO").length;
+  const inProgressTasksCount = taskRows.filter((t) => t.status === "IN_PROGRESS" || t.status === "IN_REVIEW").length;
+  const completedTasksCount = taskRows.filter((t) => t.status === "DONE").length;
+  const overdueTasksCount = taskRows.filter(
+    (t) => t.dueAt && t.dueAt < now && t.status !== "DONE" && t.status !== "CANCELLED",
+  ).length;
 
   return {
     workspace: {
       name: tenant.name,
       status: tenant.status,
       currency,
-      enabledModules: entitlements.filter((e) => e.isEnabled).map((e) => e.moduleCode),
+      enabledModules,
     },
     appliedFilters: {
       period: query.period,
@@ -156,53 +302,88 @@ export async function getDashboardSummary(tenantId: string, query: DashboardSumm
       ownerUserId: ownerUserId ?? null,
       status: query.status ?? null,
     },
+    // Admin-focused summary payload fields
+    users_summary: {
+      active: activeUsersCount,
+      inactive: inactiveUsersCount,
+      invited: pendingInvitationsCount,
+      seats_used: seatsUsed,
+      seat_limit: seatLimit,
+    },
+    org_summary: {
+      branches_count: branchesCount,
+      departments_count: departmentsCount,
+      teams_count: teamsCount,
+      unassigned_users_count: unassignedUsersCount,
+    },
+    enabled_modules: enabledModules,
+    setup_progress: {
+      completed_steps: completedSteps,
+      total_steps: setupChecklist.length,
+      percentage: setupPercentage,
+      checklist: setupChecklist,
+    },
+    recent_audit_events: recentAuditRows.map((ev) => ({
+      id: ev.id,
+      actor_user_id: ev.actorUserId,
+      actor_name: ev.actorName ?? null,
+      action: ev.action,
+      entity_type: ev.entityType,
+      entity_id: ev.entityId,
+      before_data: ev.beforeData,
+      after_data: ev.afterData,
+      reason: ev.reason,
+      request_id: ev.requestId,
+      created_at: ev.createdAt,
+    })),
     kpis: {
       revenue: {
-        totalRevenue: 0,
-        invoicedAmount: 0,
-        collectedAmount: 0,
+        totalRevenue: totalCollected,
+        invoicedAmount: totalInvoiced,
+        collectedAmount: totalCollected,
         growthPercent: 0,
         currency,
       },
       salesPipeline: {
-        totalPipelineValue: 0,
-        openDealsCount: 0,
-        wonDealsCount: 0,
-        conversionRatePercent: 0,
+        totalPipelineValue: Number(totalPipelineVal.toFixed(2)),
+        openDealsCount: openLeads.length,
+        wonDealsCount: wonLeads.length,
+        conversionRatePercent: conversionRate,
         currency,
         byStage: [],
       },
       dueInvoices: {
-        clientOverdueCount: 0,
-        clientOverdueAmount: 0,
+        clientOverdueCount: totalClientDue > 0 ? 1 : 0,
+        clientOverdueAmount: totalClientDue,
         platformOverdueInvoicesCount: overdueSubscriptionInvoices[0]?.count ?? 0,
         platformOverdueAmount: Number(overdueSubscriptionInvoices[0]?.total ?? 0),
         currency,
       },
       expenses: {
-        totalExpenses: 0,
-        approvedExpensesCount: 0,
-        pendingApprovalCount: 0,
+        totalExpenses: Number(totalExpensesAmt.toFixed(2)),
+        approvedExpensesCount: approvedExpenses.length,
+        pendingApprovalCount: pendingExpenses.length,
         currency,
       },
       tasks: {
-        totalTasks: 0,
-        pendingCount: 0,
-        inProgressCount: 0,
-        overdueCount: 0,
-        completedCount: 0,
+        totalTasks: taskRows.length,
+        pendingCount: pendingTasksCount,
+        inProgressCount: inProgressTasksCount,
+        overdueCount: overdueTasksCount,
+        completedCount: completedTasksCount,
       },
       organization: {
-        teamMembersCount: memberCount?.count ?? 0,
-        branchesCount: branchCount?.count ?? 0,
-        departmentsCount: deptCount?.count ?? 0,
-        teamsCount: teamCount?.count ?? 0,
-        seatsUsed: usage?.seatsUsed ?? 1,
+        teamMembersCount: allMemberships.length,
+        branchesCount,
+        departmentsCount,
+        teamsCount,
+        seatsUsed,
+        seatLimit,
         storageUsedMb: usage?.storageUsedMb ?? 0,
         apiCallsUsed: usage?.apiCallsUsed ?? 0,
       },
     },
-    recentActivities,
+    recentActivities: recentAuditRows,
   };
 }
 

@@ -10,7 +10,9 @@ import {
   createLeadFollowupSchema,
   createLeadSchema,
   customersQuerySchema,
+  importLeadsSchema,
   leadsQuerySchema,
+  pipelineQuerySchema,
   updateFollowupSchema,
   updateLeadSchema,
 } from "./crm.model";
@@ -24,6 +26,7 @@ import {
   getCrmPipeline,
   getCustomerDetail,
   getLeadDetail,
+  importLeads,
   listCustomers,
   listLeads,
   updateFollowup,
@@ -101,8 +104,16 @@ export const convertLeadHandler: RequestHandler = async (req, res) => {
 
 export const getCrmPipelineHandler: RequestHandler = async (req, res) => {
   const auth = requireAuthTenant(req);
-  const result = await getCrmPipeline(auth);
+  const query = pipelineQuerySchema.parse(req.query);
+  const result = await getCrmPipeline(auth, query);
   return sendSuccess(res, result);
+};
+
+export const importLeadsHandler: RequestHandler = async (req, res) => {
+  const auth = requireAuthTenant(req);
+  const input = importLeadsSchema.parse(req.body);
+  const result = await importLeads(auth, input, req.requestId);
+  return sendSuccess(res, result, { status: 201 });
 };
 
 export const listCustomersHandler: RequestHandler = async (req, res) => {

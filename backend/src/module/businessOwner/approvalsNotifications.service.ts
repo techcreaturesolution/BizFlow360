@@ -7,6 +7,7 @@ import {
   DEFAULT_NOTIFICATION_PREFERENCES,
   notificationPreferences,
   notifications,
+  salesQuotations,
   users,
   workflowInstanceSteps,
 } from "../../db/schema";
@@ -26,7 +27,7 @@ import type {
 // ==========================================
 export async function getApprovalInbox(auth: AuthContext, query: ApprovalInboxQuery) {
   const tenantId = auth.tenantId!;
-  const scopeCtx = await resolveRecordScope(auth, "APPROVALS.INBOX.VIEW_ALL", "APPROVALS.INBOX.VIEW");
+  const scopeCtx = await resolveRecordScope(auth, "APPROVALS.INBOX.VIEW_ALL", "APPROVALS.INBOX.VIEW_TEAM");
 
   const conditions = [eq(approvalRequests.tenantId, tenantId)];
 
@@ -151,7 +152,7 @@ export async function decideApprovalRequest(
 ) {
   const tenantId = auth.tenantId!;
   const actorUserId = auth.userId;
-  const scopeCtx = await resolveRecordScope(auth, "APPROVALS.INBOX.VIEW_ALL", "APPROVALS.INBOX.VIEW");
+  const scopeCtx = await resolveRecordScope(auth, "APPROVALS.INBOX.VIEW_ALL", "APPROVALS.INBOX.VIEW_TEAM");
 
   const [existing] = await db
     .select()
@@ -223,6 +224,22 @@ export async function decideApprovalRequest(
       decidedAt: now,
     });
 
+    if (existing.entityType === "QUOTATION") {
+      await tx
+        .update(salesQuotations)
+        .set({
+          status: decision,
+          ...(decision === "APPROVED" ? { approvedBy: actorUserId, approvedAt: now } : {}),
+          updatedAt: now,
+        })
+        .where(
+          and(
+            eq(salesQuotations.id, existing.entityId),
+            eq(salesQuotations.tenantId, tenantId),
+          ),
+        );
+    }
+
     // Notify requester via in-app notification
     await tx.insert(notifications).values({
       tenantId,
@@ -273,7 +290,7 @@ export async function decideApprovalRequest(
 // Workflow Instance History (GET /workflows/instances/:id)
 export async function getWorkflowInstanceHistory(auth: AuthContext, instanceId: string) {
   const tenantId = auth.tenantId!;
-  const scopeCtx = await resolveRecordScope(auth, "APPROVALS.INBOX.VIEW_ALL", "APPROVALS.INBOX.VIEW");
+  const scopeCtx = await resolveRecordScope(auth, "APPROVALS.INBOX.VIEW_ALL", "APPROVALS.INBOX.VIEW_TEAM");
 
   const [instance] = await db
     .select({

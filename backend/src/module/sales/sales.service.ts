@@ -1,8 +1,11 @@
-// Sales Service: Catalogue, Quotations, Orders, Invoices & Payments with server-side math & Record Scope.
-import { and, desc, eq, ilike, or, sql } from "drizzle-orm";
+// Sales Service: Catalogue, Quotations, Orders, Invoices & Payments with server-side math, atomic guards & 3-tier Record Scope.
+import { and, desc, eq, ilike, inArray, ne, or, sql } from "drizzle-orm";
 import { db } from "../../db";
 import {
+  approvalRequests,
   crmCustomers,
+  departments,
+  notifications,
   salesInvoiceItems,
   salesInvoicePayments,
   salesInvoices,
@@ -12,11 +15,20 @@ import {
   salesQuotationItems,
   salesQuotations,
   tenants,
+  users,
+  workflowInstanceSteps,
 } from "../../db/schema";
 import { writeAudit } from "../../lib/audit";
 import { Errors } from "../../lib/errors";
-import { hasTenantWideScope, type AuthContext } from "../../middlewares/guards";
+import {
+  hasTenantWideScope,
+  resolveRecordScope,
+  type AuthContext,
+  type RecordScopeContext,
+} from "../../middlewares/guards";
 import type {
+  ApproveQuotationInput,
+  ConvertQuotationOrderInput,
   CreateOrderInput,
   CreateProductInput,
   CreateQuotationInput,
@@ -27,10 +39,79 @@ import type {
   QuotationsQuery,
   RecordPaymentInput,
   SalesInvoicesQuery,
+  SendQuotationInput,
   UpdateProductInput,
 } from "./sales.model";
 
-// Server-side line item calculation engine (Rule #3: never trust frontend totals)
+async function resolveSalesScope(auth: AuthContext, isOrder = false): Promise<RecordScopeContext> {
+  if (hasTenantWideScope(auth, "SALES.QUOTATIONS.VIEW_ALL")) {
+    return { scope: "COMPANY_WIDE", departmentIds: [], teamIds: [], teamUserIds: [] };
+  }
+  const teamPerm =
+    isOrder && auth.permissions.includes("SALES.ORDERS.VIEW_TEAM")
+      ? "SALES.ORDERS.VIEW_TEAM"
+      : "SALES.QUOTATIONS.VIEW_TEAM";
+  return resolveRecordScope(auth, "SALES.QUOTATIONS.VIEW_ALL", teamPerm);
+}
+
+function assertSalesRecordAccess(
+  scopeCtx: RecordScopeContext,
+  ownerUserId: string | null,
+  createdBy: string | null,
+  actorUserId: string,
+  entityLabel: string,
+) {
+  if (scopeCtx.scope === "COMPANY_WIDE") return;
+
+  if (scopeCtx.scope === "TEAM_DEPARTMENT") {
+    const inTeam =
+      (ownerUserId && scopeCtx.teamUserIds.includes(ownerUserId)) ||
+      (createdBy && scopeCtx.teamUserIds.includes(createdBy));
+    if (!inTeam) {
+      throw Errors.forbidden(`You do not have access to this ${entityLabel} outside your sales team.`);
+    }
+    return;
+  }
+
+  if (ownerUserId !== actorUserId && createdBy !== actorUserId) {
+    throw Errors.forbidden(`You do not have access to this ${entityLabel}.`);
+  }
+}
+
+function applySalesOwnerFilter(
+  scopeCtx: RecordScopeContext,
+  auth: AuthContext,
+  requestedOwnerId: string | undefined,
+  ownerCol:
+    | typeof salesQuotations.ownerUserId
+    | typeof salesOrders.ownerUserId
+    | typeof salesInvoices.ownerUserId,
+  createdCol:
+    | typeof salesQuotations.createdBy
+    | typeof salesOrders.createdBy
+    | typeof salesInvoices.createdBy,
+) {
+  if (scopeCtx.scope === "COMPANY_WIDE") {
+    return requestedOwnerId ? [eq(ownerCol, requestedOwnerId)] : [];
+  }
+
+  if (scopeCtx.scope === "TEAM_DEPARTMENT") {
+    if (requestedOwnerId) {
+      if (!scopeCtx.teamUserIds.includes(requestedOwnerId)) {
+        throw Errors.forbidden("Cannot view sales records outside your team.");
+      }
+      return [eq(ownerCol, requestedOwnerId)];
+    }
+    return [or(inArray(ownerCol, scopeCtx.teamUserIds), inArray(createdCol, scopeCtx.teamUserIds))!];
+  }
+
+  if (requestedOwnerId && requestedOwnerId !== auth.userId) {
+    throw Errors.forbidden("You can only view your own assigned sales records.");
+  }
+  return [or(eq(ownerCol, auth.userId), eq(createdCol, auth.userId))!];
+}
+
+// Server-side line item calculation engine (Strict Rule #2: never trust frontend totals)
 function computeOrderTotals(items: LineItemInput[]) {
   let subtotal = 0;
   let discountTotal = 0;
@@ -38,24 +119,29 @@ function computeOrderTotals(items: LineItemInput[]) {
   let grandTotal = 0;
 
   const computedItems = items.map((item) => {
-    const gross = Number((item.quantity * item.unitPrice).toFixed(2));
-    const discount = Math.min(gross, Math.max(0, Number(item.discountAmount.toFixed(2))));
+    const productId = item.productId ?? item.product_id ?? null;
+    const rawUnitPrice = item.unitPrice ?? item.unit_price ?? 0;
+    const rawDiscount = item.discountAmount ?? item.discount_amount ?? 0;
+    const rawTaxRate = item.taxRate ?? item.tax_rate ?? 18;
+
+    const gross = Number((item.quantity * rawUnitPrice).toFixed(2));
+    const discount = Math.min(gross, Math.max(0, Number(rawDiscount.toFixed(2))));
     const netSubtotal = Number((gross - discount).toFixed(2));
-    const taxAmount = Number(((netSubtotal * item.taxRate) / 100).toFixed(2));
+    const taxAmount = Number(((netSubtotal * rawTaxRate) / 100).toFixed(2));
     const lineTotal = Number((netSubtotal + taxAmount).toFixed(2));
 
-    subtotal += gross;
-    discountTotal += discount;
-    taxTotal += taxAmount;
-    grandTotal += lineTotal;
+    subtotal = Number((subtotal + gross).toFixed(2));
+    discountTotal = Number((discountTotal + discount).toFixed(2));
+    taxTotal = Number((taxTotal + taxAmount).toFixed(2));
+    grandTotal = Number((grandTotal + lineTotal).toFixed(2));
 
     return {
-      productId: item.productId ?? null,
+      productId,
       description: item.description,
       quantity: item.quantity.toFixed(2),
-      unitPrice: item.unitPrice.toFixed(2),
+      unitPrice: rawUnitPrice.toFixed(2),
       discountAmount: discount.toFixed(2),
-      taxRate: item.taxRate.toFixed(2),
+      taxRate: rawTaxRate.toFixed(2),
       lineSubtotal: netSubtotal.toFixed(2),
       lineTax: taxAmount.toFixed(2),
       lineTotal: lineTotal.toFixed(2),
@@ -71,6 +157,22 @@ function computeOrderTotals(items: LineItemInput[]) {
   };
 }
 
+async function assertLineItemProductsExist(tenantId: string, items: LineItemInput[]) {
+  const productIds = Array.from(
+    new Set(items.map((it) => it.productId ?? it.product_id).filter(Boolean) as string[]),
+  );
+  if (productIds.length === 0) return;
+
+  const found = await db
+    .select({ id: salesProducts.id })
+    .from(salesProducts)
+    .where(and(eq(salesProducts.tenantId, tenantId), inArray(salesProducts.id, productIds)));
+
+  if (found.length !== productIds.length) {
+    throw Errors.badRequest("One or more referenced products do not exist in your company catalogue.");
+  }
+}
+
 async function getTenantCurrency(tenantId: string): Promise<string> {
   const [t] = await db
     .select({ defaultCurrency: tenants.defaultCurrency })
@@ -82,7 +184,7 @@ async function getTenantCurrency(tenantId: string): Promise<string> {
 
 async function assertCustomerExists(tenantId: string, customerId: string) {
   const [c] = await db
-    .select({ id: crmCustomers.id, name: crmCustomers.name })
+    .select({ id: crmCustomers.id, name: crmCustomers.name, email: crmCustomers.email })
     .from(crmCustomers)
     .where(and(eq(crmCustomers.id, customerId), eq(crmCustomers.tenantId, tenantId)))
     .limit(1);
@@ -97,8 +199,16 @@ async function assertCustomerExists(tenantId: string, customerId: string) {
 // ==========================================
 export async function listProducts(tenantId: string, query: ProductsQuery) {
   const conditions = [eq(salesProducts.tenantId, tenantId)];
-  if (query.itemType) conditions.push(eq(salesProducts.itemType, query.itemType));
-  if (query.isActive !== undefined) conditions.push(eq(salesProducts.isActive, query.isActive));
+  const itemType = query.itemType ?? query.item_type;
+  const activeFilter =
+    query.isActive !== undefined
+      ? query.isActive
+      : query.status !== undefined
+        ? query.status === "ACTIVE"
+        : undefined;
+
+  if (itemType) conditions.push(eq(salesProducts.itemType, itemType));
+  if (activeFilter !== undefined) conditions.push(eq(salesProducts.isActive, activeFilter));
   if (query.search) {
     const p = `%${query.search}%`;
     conditions.push(or(ilike(salesProducts.name, p), ilike(salesProducts.sku, p))!);
@@ -126,6 +236,7 @@ export async function listProducts(tenantId: string, query: ProductsQuery) {
       sellingPrice: Number(p.sellingPrice),
       taxRate: Number(p.taxRate),
       stockQuantity: Number(p.stockQuantity),
+      status: p.isActive ? "ACTIVE" : "INACTIVE",
     })),
     pagination: {
       page: query.page,
@@ -153,6 +264,19 @@ export async function createProduct(
     throw Errors.conflict(`Product with SKU '${input.sku}' already exists.`);
   }
 
+  const itemType = input.itemType ?? input.item_type ?? "PRODUCT";
+  const purchasePrice = input.purchasePrice ?? input.purchase_price ?? 0;
+  const sellingPrice = (input.sellingPrice ?? input.selling_price)!;
+  const taxRate = input.taxRate ?? input.tax_rate ?? 18;
+  const trackInventory = input.trackInventory ?? input.track_inventory ?? false;
+  const stockQuantity = input.stockQuantity ?? input.stock_quantity ?? 0;
+  const isActive =
+    input.isActive !== undefined
+      ? input.isActive
+      : input.status !== undefined
+        ? input.status === "ACTIVE"
+        : true;
+
   const [created] = await db.transaction(async (tx) => {
     const rows = await tx
       .insert(salesProducts)
@@ -161,14 +285,14 @@ export async function createProduct(
         sku: input.sku,
         name: input.name,
         description: input.description ?? null,
-        itemType: input.itemType,
+        itemType,
         unit: input.unit,
-        purchasePrice: input.purchasePrice.toFixed(2),
-        sellingPrice: input.sellingPrice.toFixed(2),
-        taxRate: input.taxRate.toFixed(2),
-        trackInventory: input.trackInventory,
-        stockQuantity: input.stockQuantity.toFixed(2),
-        isActive: input.isActive,
+        purchasePrice: purchasePrice.toFixed(2),
+        sellingPrice: sellingPrice.toFixed(2),
+        taxRate: taxRate.toFixed(2),
+        trackInventory,
+        stockQuantity: stockQuantity.toFixed(2),
+        isActive,
         createdBy: auth.userId,
       })
       .returning();
@@ -179,7 +303,7 @@ export async function createProduct(
       action: "SALES.PRODUCT.CREATE",
       entityType: "sales_product",
       entityId: rows[0].id,
-      afterData: { sku: input.sku, name: input.name, sellingPrice: input.sellingPrice },
+      afterData: { sku: input.sku, name: input.name, sellingPrice },
       requestId,
     });
 
@@ -193,6 +317,7 @@ export async function createProduct(
       sellingPrice: Number(created.sellingPrice),
       taxRate: Number(created.taxRate),
       stockQuantity: Number(created.stockQuantity),
+      status: created.isActive ? "ACTIVE" : "INACTIVE",
     },
   };
 }
@@ -214,6 +339,19 @@ export async function updateProduct(
     throw Errors.notFound("Product not found.");
   }
 
+  const itemType = input.itemType ?? input.item_type;
+  const purchasePrice = input.purchasePrice ?? input.purchase_price;
+  const sellingPrice = input.sellingPrice ?? input.selling_price;
+  const taxRate = input.taxRate ?? input.tax_rate;
+  const trackInventory = input.trackInventory ?? input.track_inventory;
+  const stockQuantity = input.stockQuantity ?? input.stock_quantity;
+  const isActive =
+    input.isActive !== undefined
+      ? input.isActive
+      : input.status !== undefined
+        ? input.status === "ACTIVE"
+        : undefined;
+
   const [updated] = await db.transaction(async (tx) => {
     const rows = await tx
       .update(salesProducts)
@@ -221,14 +359,14 @@ export async function updateProduct(
         ...(input.sku !== undefined && { sku: input.sku }),
         ...(input.name !== undefined && { name: input.name }),
         ...(input.description !== undefined && { description: input.description }),
-        ...(input.itemType !== undefined && { itemType: input.itemType }),
+        ...(itemType !== undefined && { itemType }),
         ...(input.unit !== undefined && { unit: input.unit }),
-        ...(input.purchasePrice !== undefined && { purchasePrice: input.purchasePrice.toFixed(2) }),
-        ...(input.sellingPrice !== undefined && { sellingPrice: input.sellingPrice.toFixed(2) }),
-        ...(input.taxRate !== undefined && { taxRate: input.taxRate.toFixed(2) }),
-        ...(input.trackInventory !== undefined && { trackInventory: input.trackInventory }),
-        ...(input.stockQuantity !== undefined && { stockQuantity: input.stockQuantity.toFixed(2) }),
-        ...(input.isActive !== undefined && { isActive: input.isActive }),
+        ...(purchasePrice !== undefined && { purchasePrice: purchasePrice.toFixed(2) }),
+        ...(sellingPrice !== undefined && { sellingPrice: sellingPrice.toFixed(2) }),
+        ...(taxRate !== undefined && { taxRate: taxRate.toFixed(2) }),
+        ...(trackInventory !== undefined && { trackInventory }),
+        ...(stockQuantity !== undefined && { stockQuantity: stockQuantity.toFixed(2) }),
+        ...(isActive !== undefined && { isActive }),
         updatedAt: new Date(),
       })
       .where(and(eq(salesProducts.id, productId), eq(salesProducts.tenantId, tenantId)))
@@ -255,6 +393,7 @@ export async function updateProduct(
       sellingPrice: Number(updated.sellingPrice),
       taxRate: Number(updated.taxRate),
       stockQuantity: Number(updated.stockQuantity),
+      status: updated.isActive ? "ACTIVE" : "INACTIVE",
     },
   };
 }
@@ -264,14 +403,33 @@ export async function updateProduct(
 // ==========================================
 export async function listQuotations(auth: AuthContext, query: QuotationsQuery) {
   const tenantId = auth.tenantId!;
-  const isCompanyWide = hasTenantWideScope(auth, "SALES.QUOTATIONS.VIEW_ALL");
+  const scopeCtx = await resolveSalesScope(auth, false);
+  const customerId = query.customerId ?? query.customer_id;
+  const createdByFilter = query.createdBy ?? query.created_by;
+  const requestedOwner = query.ownerUserId ?? query.owner_user_id;
 
-  const conditions = [eq(salesQuotations.tenantId, tenantId)];
-  if (!isCompanyWide) {
-    conditions.push(or(eq(salesQuotations.ownerUserId, auth.userId), eq(salesQuotations.createdBy, auth.userId))!);
-  }
+  const conditions = [
+    eq(salesQuotations.tenantId, tenantId),
+    ...applySalesOwnerFilter(
+      scopeCtx,
+      auth,
+      requestedOwner,
+      salesQuotations.ownerUserId,
+      salesQuotations.createdBy,
+    ),
+  ];
+
   if (query.status) conditions.push(eq(salesQuotations.status, query.status));
-  if (query.customerId) conditions.push(eq(salesQuotations.customerId, query.customerId));
+  if (customerId) conditions.push(eq(salesQuotations.customerId, customerId));
+  if (createdByFilter) {
+    if (scopeCtx.scope === "TEAM_DEPARTMENT" && !scopeCtx.teamUserIds.includes(createdByFilter)) {
+      throw Errors.forbidden("Cannot filter quotations for a user outside your sales team.");
+    }
+    if (scopeCtx.scope === "OWN_ONLY" && createdByFilter !== auth.userId) {
+      throw Errors.forbidden("You can only view your own quotations.");
+    }
+    conditions.push(eq(salesQuotations.createdBy, createdByFilter));
+  }
 
   const offset = (query.page - 1) * query.limit;
 
@@ -281,9 +439,11 @@ export async function listQuotations(auth: AuthContext, query: QuotationsQuery) 
       .select({
         quotation: salesQuotations,
         customerName: crmCustomers.name,
+        ownerName: users.fullName,
       })
       .from(salesQuotations)
       .leftJoin(crmCustomers, eq(crmCustomers.id, salesQuotations.customerId))
+      .leftJoin(users, eq(users.id, salesQuotations.ownerUserId))
       .where(and(...conditions))
       .orderBy(desc(salesQuotations.createdAt))
       .limit(query.limit)
@@ -293,10 +453,11 @@ export async function listQuotations(auth: AuthContext, query: QuotationsQuery) 
   const total = totalRow?.count ?? 0;
 
   return {
-    scope: isCompanyWide ? "COMPANY_WIDE" : "ASSIGNED_ONLY",
+    scope: scopeCtx.scope,
     quotations: rows.map((r) => ({
       ...r.quotation,
       customerName: r.customerName ?? null,
+      ownerName: r.ownerName ?? null,
       subtotal: Number(r.quotation.subtotal),
       discountTotal: Number(r.quotation.discountTotal),
       taxTotal: Number(r.quotation.taxTotal),
@@ -318,11 +479,27 @@ export async function createQuotation(
   requestId?: string,
 ) {
   const tenantId = auth.tenantId!;
-  await assertCustomerExists(tenantId, input.customerId);
+  const customerId = (input.customerId ?? input.customer_id)!;
+  const issueDate = (input.issueDate ?? input.issue_date)!;
+  const validUntil = (input.validUntil ?? input.valid_until)!;
+
+  const customer = await assertCustomerExists(tenantId, customerId);
+  await assertLineItemProductsExist(tenantId, input.items);
   const currency = await getTenantCurrency(tenantId);
 
   const calc = computeOrderTotals(input.items);
   const quotationNo = `QTN-${new Date().getFullYear()}-${String(Date.now()).slice(-6)}`;
+  const initialStatus = input.submitForApproval ? "PENDING_APPROVAL" : "DRAFT";
+
+  let departmentManagerId: string | null = null;
+  if (input.submitForApproval && auth.departmentId) {
+    const [dept] = await db
+      .select({ managerUserId: departments.managerUserId })
+      .from(departments)
+      .where(and(eq(departments.id, auth.departmentId), eq(departments.tenantId, tenantId)))
+      .limit(1);
+    departmentManagerId = dept?.managerUserId ?? null;
+  }
 
   const created = await db.transaction(async (tx) => {
     const [quotation] = await tx
@@ -330,11 +507,11 @@ export async function createQuotation(
       .values({
         tenantId,
         quotationNo,
-        customerId: input.customerId,
+        customerId,
         ownerUserId: auth.userId,
-        status: "DRAFT",
-        issueDate: input.issueDate,
-        validUntil: input.validUntil,
+        status: initialStatus,
+        issueDate,
+        validUntil,
         terms: input.terms ?? null,
         currency,
         subtotal: calc.subtotal,
@@ -356,13 +533,62 @@ export async function createQuotation(
       )
       .returning();
 
+    if (input.submitForApproval) {
+      const [approval] = await tx
+        .insert(approvalRequests)
+        .values({
+          tenantId,
+          entityType: "QUOTATION",
+          entityId: quotation.id,
+          entityNumber: quotationNo,
+          title: `Quotation ${quotationNo} for ${customer.name}`,
+          amount: calc.grandTotal,
+          currency,
+          requestedBy: auth.userId,
+          approverUserId: departmentManagerId,
+          branchId: auth.branchId ?? null,
+          departmentId: auth.departmentId ?? null,
+          status: "PENDING",
+          currentStage: "MANAGER_REVIEW",
+        })
+        .returning();
+
+      await tx.insert(workflowInstanceSteps).values({
+        tenantId,
+        approvalRequestId: approval.id,
+        stepNumber: 1,
+        stepName: "QUOTATION_SUBMISSION",
+        action: "SUBMITTED",
+        actorUserId: auth.userId,
+        comment: `Quotation ${quotationNo} submitted for approval`,
+      });
+
+      if (departmentManagerId && departmentManagerId !== auth.userId) {
+        await tx.insert(notifications).values({
+          tenantId,
+          userId: departmentManagerId,
+          category: "APPROVAL",
+          title: "Quotation Approval Requested",
+          message: `Quotation ${quotationNo} (${currency} ${calc.grandTotal}) requires your approval.`,
+          entityType: "QUOTATION",
+          entityId: quotation.id,
+          actionUrl: `/sales/quotations/${quotation.id}`,
+        });
+      }
+    }
+
     await writeAudit(tx, {
       tenantId,
       actorUserId: auth.userId,
       action: "SALES.QUOTATION.CREATE",
       entityType: "sales_quotation",
       entityId: quotation.id,
-      afterData: { quotationNo, grandTotal: Number(quotation.grandTotal), itemCount: insertedItems.length },
+      afterData: {
+        quotationNo,
+        status: initialStatus,
+        grandTotal: Number(quotation.grandTotal),
+        itemCount: insertedItems.length,
+      },
       requestId,
     });
 
@@ -384,13 +610,18 @@ export async function createQuotation(
 
 export async function getQuotationDetail(auth: AuthContext, quotationId: string) {
   const tenantId = auth.tenantId!;
+  const scopeCtx = await resolveSalesScope(auth, false);
+
   const [row] = await db
     .select({
       quotation: salesQuotations,
       customerName: crmCustomers.name,
+      customerEmail: crmCustomers.email,
+      ownerName: users.fullName,
     })
     .from(salesQuotations)
     .leftJoin(crmCustomers, eq(crmCustomers.id, salesQuotations.customerId))
+    .leftJoin(users, eq(users.id, salesQuotations.ownerUserId))
     .where(and(eq(salesQuotations.id, quotationId), eq(salesQuotations.tenantId, tenantId)))
     .limit(1);
 
@@ -398,20 +629,31 @@ export async function getQuotationDetail(auth: AuthContext, quotationId: string)
     throw Errors.notFound("Quotation not found.");
   }
 
-  const isCompanyWide = hasTenantWideScope(auth, "SALES.QUOTATIONS.VIEW_ALL");
-  if (!isCompanyWide && row.quotation.ownerUserId !== auth.userId && row.quotation.createdBy !== auth.userId) {
-    throw Errors.forbidden("You do not have access to this quotation.");
-  }
+  assertSalesRecordAccess(
+    scopeCtx,
+    row.quotation.ownerUserId,
+    row.quotation.createdBy,
+    auth.userId,
+    "quotation",
+  );
 
-  const items = await db
-    .select()
-    .from(salesQuotationItems)
-    .where(eq(salesQuotationItems.quotationId, quotationId));
+  const [items, linkedOrder] = await Promise.all([
+    db.select().from(salesQuotationItems).where(eq(salesQuotationItems.quotationId, quotationId)),
+    db
+      .select({ id: salesOrders.id, orderNo: salesOrders.orderNo, status: salesOrders.status })
+      .from(salesOrders)
+      .where(and(eq(salesOrders.tenantId, tenantId), eq(salesOrders.quotationId, quotationId)))
+      .limit(1),
+  ]);
 
   return {
+    scope: scopeCtx.scope,
     quotation: {
       ...row.quotation,
       customerName: row.customerName ?? null,
+      customerEmail: row.customerEmail ?? null,
+      ownerName: row.ownerName ?? null,
+      convertedOrder: linkedOrder[0] ?? null,
       subtotal: Number(row.quotation.subtotal),
       discountTotal: Number(row.quotation.discountTotal),
       taxTotal: Number(row.quotation.taxTotal),
@@ -425,9 +667,12 @@ export async function getQuotationDetail(auth: AuthContext, quotationId: string)
 export async function approveQuotation(
   auth: AuthContext,
   quotationId: string,
+  input: ApproveQuotationInput = {},
   requestId?: string,
 ) {
   const tenantId = auth.tenantId!;
+  const scopeCtx = await resolveSalesScope(auth, false);
+
   const [existing] = await db
     .select()
     .from(salesQuotations)
@@ -435,9 +680,19 @@ export async function approveQuotation(
     .limit(1);
 
   if (!existing) throw Errors.notFound("Quotation not found.");
-  if (existing.status === "CONVERTED") throw Errors.conflict("Converted quotation cannot be re-approved.");
 
+  assertSalesRecordAccess(scopeCtx, existing.ownerUserId, existing.createdBy, auth.userId, "quotation");
+
+  if (existing.status === "CONVERTED") {
+    throw Errors.conflict("Converted quotation cannot be re-approved.");
+  }
+  if (existing.status === "REJECTED") {
+    throw Errors.conflict("Rejected quotation cannot be approved directly.");
+  }
+
+  const commentText = input.comment || input.reason || null;
   const now = new Date();
+
   const [updated] = await db.transaction(async (tx) => {
     const rows = await tx
       .update(salesQuotations)
@@ -450,6 +705,63 @@ export async function approveQuotation(
       .where(and(eq(salesQuotations.id, quotationId), eq(salesQuotations.tenantId, tenantId)))
       .returning();
 
+    const [pendingApproval] = await tx
+      .select()
+      .from(approvalRequests)
+      .where(
+        and(
+          eq(approvalRequests.tenantId, tenantId),
+          eq(approvalRequests.entityType, "QUOTATION"),
+          eq(approvalRequests.entityId, quotationId),
+          eq(approvalRequests.status, "PENDING"),
+        ),
+      )
+      .limit(1);
+
+    if (pendingApproval) {
+      await tx
+        .update(approvalRequests)
+        .set({
+          status: "APPROVED",
+          currentStage: "COMPLETED",
+          decisionComment: commentText,
+          decidedBy: auth.userId,
+          decidedAt: now,
+          updatedAt: now,
+        })
+        .where(eq(approvalRequests.id, pendingApproval.id));
+
+      const [{ count: stepsCount }] = await tx
+        .select({ count: sql<number>`count(*)::int` })
+        .from(workflowInstanceSteps)
+        .where(eq(workflowInstanceSteps.approvalRequestId, pendingApproval.id));
+
+      await tx.insert(workflowInstanceSteps).values({
+        tenantId,
+        approvalRequestId: pendingApproval.id,
+        stepNumber: (stepsCount ?? 0) + 1,
+        stepName: "SALES_MANAGER_APPROVAL",
+        action: "APPROVED",
+        actorUserId: auth.userId,
+        comment: commentText,
+        decidedAt: now,
+      });
+    }
+
+    const notifyTarget = existing.ownerUserId ?? existing.createdBy;
+    if (notifyTarget && notifyTarget !== auth.userId) {
+      await tx.insert(notifications).values({
+        tenantId,
+        userId: notifyTarget,
+        category: "SALES",
+        title: "Quotation Approved",
+        message: `Quotation ${existing.quotationNo} has been approved.${commentText ? ` Note: ${commentText}` : ""}`,
+        entityType: "QUOTATION",
+        entityId: quotationId,
+        actionUrl: `/sales/quotations/${quotationId}`,
+      });
+    }
+
     await writeAudit(tx, {
       tenantId,
       actorUserId: auth.userId,
@@ -457,36 +769,65 @@ export async function approveQuotation(
       entityType: "sales_quotation",
       entityId: quotationId,
       beforeData: { status: existing.status },
-      afterData: { status: "APPROVED", approvedBy: auth.userId },
+      afterData: { status: "APPROVED", approvedBy: auth.userId, comment: commentText },
+      reason: commentText ?? undefined,
       requestId,
     });
 
     return rows;
   });
 
-  return { quotation: updated, message: "Quotation approved successfully." };
+  return {
+    quotation: {
+      ...updated,
+      subtotal: Number(updated.subtotal),
+      discountTotal: Number(updated.discountTotal),
+      taxTotal: Number(updated.taxTotal),
+      grandTotal: Number(updated.grandTotal),
+      currency: updated.currency.trim(),
+    },
+    message: "Quotation approved successfully.",
+  };
 }
 
 export async function sendQuotation(
   auth: AuthContext,
   quotationId: string,
+  input: Partial<SendQuotationInput> = {},
   requestId?: string,
 ) {
   const tenantId = auth.tenantId!;
-  const [existing] = await db
-    .select()
+  const scopeCtx = await resolveSalesScope(auth, false);
+
+  const [row] = await db
+    .select({
+      quotation: salesQuotations,
+      customerEmail: crmCustomers.email,
+      customerName: crmCustomers.name,
+    })
     .from(salesQuotations)
+    .leftJoin(crmCustomers, eq(crmCustomers.id, salesQuotations.customerId))
     .where(and(eq(salesQuotations.id, quotationId), eq(salesQuotations.tenantId, tenantId)))
     .limit(1);
 
-  if (!existing) throw Errors.notFound("Quotation not found.");
+  if (!row) throw Errors.notFound("Quotation not found.");
 
+  const existing = row.quotation;
+  assertSalesRecordAccess(scopeCtx, existing.ownerUserId, existing.createdBy, auth.userId, "quotation");
+
+  if (existing.status === "REJECTED") {
+    throw Errors.badRequest("Rejected quotation cannot be sent to customer.");
+  }
+
+  const recipientEmail = input.recipientEmail ?? input.recipient_email ?? row.customerEmail ?? null;
+  const deliveryChannel = input.deliveryChannel ?? input.delivery_channel ?? "EMAIL";
   const now = new Date();
+
   const [updated] = await db.transaction(async (tx) => {
     const rows = await tx
       .update(salesQuotations)
       .set({
-        status: "SENT",
+        status: existing.status === "CONVERTED" ? "CONVERTED" : "SENT",
         sentAt: now,
         updatedAt: now,
       })
@@ -500,57 +841,122 @@ export async function sendQuotation(
       entityType: "sales_quotation",
       entityId: quotationId,
       beforeData: { status: existing.status },
-      afterData: { status: "SENT", sentAt: now.toISOString() },
+      afterData: {
+        status: rows[0].status,
+        sentAt: now.toISOString(),
+        recipientEmail,
+        deliveryChannel,
+      },
       requestId,
     });
 
     return rows;
   });
 
-  return { quotation: updated, message: "Quotation marked as sent to customer." };
+  return {
+    quotation: {
+      ...updated,
+      subtotal: Number(updated.subtotal),
+      discountTotal: Number(updated.discountTotal),
+      taxTotal: Number(updated.taxTotal),
+      grandTotal: Number(updated.grandTotal),
+      currency: updated.currency.trim(),
+    },
+    delivery: {
+      deliveryChannel,
+      recipientEmail,
+      generatedPdfFileName: `${existing.quotationNo}.pdf`,
+      sentAt: now.toISOString(),
+    },
+    message: "Quotation marked as sent to customer.",
+  };
 }
 
+// Strict Rule #3 (QA-012): Atomic duplicate order conversion prevention
 export async function convertQuotationToOrder(
   auth: AuthContext,
   quotationId: string,
+  input: ConvertQuotationOrderInput = {},
   requestId?: string,
 ) {
   const tenantId = auth.tenantId!;
-  const [quotation] = await db
+  const scopeCtx = await resolveSalesScope(auth, false);
+
+  const [precheck] = await db
     .select()
     .from(salesQuotations)
     .where(and(eq(salesQuotations.id, quotationId), eq(salesQuotations.tenantId, tenantId)))
     .limit(1);
 
-  if (!quotation) throw Errors.notFound("Quotation not found.");
-  if (quotation.status === "CONVERTED") {
+  if (!precheck) throw Errors.notFound("Quotation not found.");
+  assertSalesRecordAccess(scopeCtx, precheck.ownerUserId, precheck.createdBy, auth.userId, "quotation");
+
+  if (precheck.status === "REJECTED") {
+    throw Errors.badRequest("Rejected quotation cannot be converted to a Sales Order.");
+  }
+  if (precheck.status === "CONVERTED") {
     throw Errors.conflict("Quotation has already been converted to an order.");
   }
 
-  const qItems = await db
-    .select()
-    .from(salesQuotationItems)
-    .where(eq(salesQuotationItems.quotationId, quotationId));
-
+  const orderDate = input.orderDate ?? input.order_date ?? new Date().toISOString().slice(0, 10);
   const orderNo = `ORD-${new Date().getFullYear()}-${String(Date.now()).slice(-6)}`;
-  const todayStr = new Date().toISOString().slice(0, 10);
 
   const created = await db.transaction(async (tx) => {
+    const [existingOrder] = await tx
+      .select({ id: salesOrders.id, orderNo: salesOrders.orderNo })
+      .from(salesOrders)
+      .where(
+        and(
+          eq(salesOrders.tenantId, tenantId),
+          eq(salesOrders.quotationId, quotationId),
+          ne(salesOrders.status, "CANCELLED"),
+        ),
+      )
+      .limit(1);
+
+    if (existingOrder) {
+      throw Errors.conflict(
+        `Duplicate conversion blocked: Sales Order ${existingOrder.orderNo} already exists for this quotation.`,
+      );
+    }
+
+    // Atomic compare-and-set transition on quotation status inside transaction
+    const [lockedQuotation] = await tx
+      .update(salesQuotations)
+      .set({ status: "CONVERTED", updatedAt: new Date() })
+      .where(
+        and(
+          eq(salesQuotations.id, quotationId),
+          eq(salesQuotations.tenantId, tenantId),
+          ne(salesQuotations.status, "CONVERTED"),
+        ),
+      )
+      .returning();
+
+    if (!lockedQuotation) {
+      throw Errors.conflict("Quotation has already been converted to an order.");
+    }
+
+    const qItems = await tx
+      .select()
+      .from(salesQuotationItems)
+      .where(eq(salesQuotationItems.quotationId, quotationId));
+
     const [order] = await tx
       .insert(salesOrders)
       .values({
         tenantId,
         orderNo,
-        customerId: quotation.customerId,
-        quotationId: quotation.id,
-        ownerUserId: quotation.ownerUserId ?? auth.userId,
+        customerId: lockedQuotation.customerId,
+        quotationId: lockedQuotation.id,
+        ownerUserId: lockedQuotation.ownerUserId ?? auth.userId,
         status: "CONFIRMED",
-        orderDate: todayStr,
-        currency: quotation.currency.trim(),
-        subtotal: quotation.subtotal,
-        discountTotal: quotation.discountTotal,
-        taxTotal: quotation.taxTotal,
-        grandTotal: quotation.grandTotal,
+        orderDate,
+        currency: lockedQuotation.currency.trim(),
+        subtotal: lockedQuotation.subtotal,
+        discountTotal: lockedQuotation.discountTotal,
+        taxTotal: lockedQuotation.taxTotal,
+        grandTotal: lockedQuotation.grandTotal,
         createdBy: auth.userId,
       })
       .returning();
@@ -573,10 +979,19 @@ export async function convertQuotationToOrder(
       );
     }
 
-    await tx
-      .update(salesQuotations)
-      .set({ status: "CONVERTED", updatedAt: new Date() })
-      .where(and(eq(salesQuotations.id, quotationId), eq(salesQuotations.tenantId, tenantId)));
+    const notifyTarget = lockedQuotation.ownerUserId ?? lockedQuotation.createdBy;
+    if (notifyTarget && notifyTarget !== auth.userId) {
+      await tx.insert(notifications).values({
+        tenantId,
+        userId: notifyTarget,
+        category: "SALES",
+        title: "Quotation Converted to Order",
+        message: `Quotation ${lockedQuotation.quotationNo} was converted to Sales Order ${orderNo}.`,
+        entityType: "SALES_ORDER",
+        entityId: order.id,
+        actionUrl: `/sales/orders/${order.id}`,
+      });
+    }
 
     await writeAudit(tx, {
       tenantId,
@@ -584,7 +999,12 @@ export async function convertQuotationToOrder(
       action: "SALES.QUOTATION.CONVERT_ORDER",
       entityType: "sales_order",
       entityId: order.id,
-      afterData: { quotationId, orderNo, grandTotal: Number(order.grandTotal) },
+      afterData: {
+        quotationId,
+        orderNo,
+        grandTotal: Number(order.grandTotal),
+        notes: input.notes ?? null,
+      },
       requestId,
     });
 
@@ -594,6 +1014,9 @@ export async function convertQuotationToOrder(
   return {
     order: {
       ...created,
+      subtotal: Number(created.subtotal),
+      discountTotal: Number(created.discountTotal),
+      taxTotal: Number(created.taxTotal),
       grandTotal: Number(created.grandTotal),
       currency: created.currency.trim(),
     },
@@ -606,23 +1029,37 @@ export async function convertQuotationToOrder(
 // ==========================================
 export async function listOrders(auth: AuthContext, query: OrdersQuery) {
   const tenantId = auth.tenantId!;
-  const isCompanyWide = hasTenantWideScope(auth, "SALES.QUOTATIONS.VIEW_ALL");
-  const conditions = [eq(salesOrders.tenantId, tenantId)];
+  const scopeCtx = await resolveSalesScope(auth, true);
+  const customerId = query.customerId ?? query.customer_id;
+  const requestedOwner = query.ownerUserId ?? query.owner_user_id;
 
-  if (!isCompanyWide) {
-    conditions.push(or(eq(salesOrders.ownerUserId, auth.userId), eq(salesOrders.createdBy, auth.userId))!);
-  }
+  const conditions = [
+    eq(salesOrders.tenantId, tenantId),
+    ...applySalesOwnerFilter(
+      scopeCtx,
+      auth,
+      requestedOwner,
+      salesOrders.ownerUserId,
+      salesOrders.createdBy,
+    ),
+  ];
+
   if (query.status) conditions.push(eq(salesOrders.status, query.status));
-  if (query.customerId) conditions.push(eq(salesOrders.customerId, query.customerId));
+  if (customerId) conditions.push(eq(salesOrders.customerId, customerId));
 
   const offset = (query.page - 1) * query.limit;
 
   const [[totalRow], rows] = await Promise.all([
     db.select({ count: sql<number>`count(*)::int` }).from(salesOrders).where(and(...conditions)),
     db
-      .select({ order: salesOrders, customerName: crmCustomers.name })
+      .select({
+        order: salesOrders,
+        customerName: crmCustomers.name,
+        ownerName: users.fullName,
+      })
       .from(salesOrders)
       .leftJoin(crmCustomers, eq(crmCustomers.id, salesOrders.customerId))
+      .leftJoin(users, eq(users.id, salesOrders.ownerUserId))
       .where(and(...conditions))
       .orderBy(desc(salesOrders.createdAt))
       .limit(query.limit)
@@ -632,9 +1069,11 @@ export async function listOrders(auth: AuthContext, query: OrdersQuery) {
   const total = totalRow?.count ?? 0;
 
   return {
+    scope: scopeCtx.scope,
     orders: rows.map((r) => ({
       ...r.order,
       customerName: r.customerName ?? null,
+      ownerName: r.ownerName ?? null,
       subtotal: Number(r.order.subtotal),
       discountTotal: Number(r.order.discountTotal),
       taxTotal: Number(r.order.taxTotal),
@@ -656,18 +1095,22 @@ export async function createOrder(
   requestId?: string,
 ) {
   const tenantId = auth.tenantId!;
-  await assertCustomerExists(tenantId, input.customerId);
+  const customerId = (input.customerId ?? input.customer_id)!;
+  const quotationId = input.quotationId ?? input.quotation_id ?? null;
+  const orderDate = (input.orderDate ?? input.order_date)!;
+
+  await assertCustomerExists(tenantId, customerId);
   const currency = await getTenantCurrency(tenantId);
 
   let itemsToUse: LineItemInput[] = input.items ?? [];
 
-  if (input.quotationId && itemsToUse.length === 0) {
+  if (quotationId && itemsToUse.length === 0) {
     const qItems = await db
       .select()
       .from(salesQuotationItems)
       .where(
         and(
-          eq(salesQuotationItems.quotationId, input.quotationId),
+          eq(salesQuotationItems.quotationId, quotationId),
           eq(salesQuotationItems.tenantId, tenantId),
         ),
       );
@@ -688,20 +1131,57 @@ export async function createOrder(
     throw Errors.badRequest("Kam se kam 1 item ya valid quotationId dein.");
   }
 
+  await assertLineItemProductsExist(tenantId, itemsToUse);
   const calc = computeOrderTotals(itemsToUse);
   const orderNo = `ORD-${new Date().getFullYear()}-${String(Date.now()).slice(-6)}`;
 
   const created = await db.transaction(async (tx) => {
+    if (quotationId) {
+      const [existingOrder] = await tx
+        .select({ id: salesOrders.id, orderNo: salesOrders.orderNo })
+        .from(salesOrders)
+        .where(
+          and(
+            eq(salesOrders.tenantId, tenantId),
+            eq(salesOrders.quotationId, quotationId),
+            ne(salesOrders.status, "CANCELLED"),
+          ),
+        )
+        .limit(1);
+
+      if (existingOrder) {
+        throw Errors.conflict(
+          `Duplicate conversion blocked: Sales Order ${existingOrder.orderNo} already exists for this quotation.`,
+        );
+      }
+
+      const [updatedQuotation] = await tx
+        .update(salesQuotations)
+        .set({ status: "CONVERTED", updatedAt: new Date() })
+        .where(
+          and(
+            eq(salesQuotations.id, quotationId),
+            eq(salesQuotations.tenantId, tenantId),
+            ne(salesQuotations.status, "CONVERTED"),
+          ),
+        )
+        .returning();
+
+      if (!updatedQuotation) {
+        throw Errors.conflict("Referenced quotation has already been converted.");
+      }
+    }
+
     const [order] = await tx
       .insert(salesOrders)
       .values({
         tenantId,
         orderNo,
-        customerId: input.customerId,
-        quotationId: input.quotationId ?? null,
+        customerId,
+        quotationId,
         ownerUserId: auth.userId,
         status: "CONFIRMED",
-        orderDate: input.orderDate,
+        orderDate,
         currency,
         subtotal: calc.subtotal,
         discountTotal: calc.discountTotal,
@@ -732,6 +1212,9 @@ export async function createOrder(
   return {
     order: {
       ...created.order,
+      subtotal: Number(created.order.subtotal),
+      discountTotal: Number(created.order.discountTotal),
+      taxTotal: Number(created.order.taxTotal),
       grandTotal: Number(created.order.grandTotal),
       currency: created.order.currency.trim(),
       items: created.items,
@@ -744,12 +1227,18 @@ export async function createOrder(
 // ==========================================
 export async function listSalesInvoices(auth: AuthContext, query: SalesInvoicesQuery) {
   const tenantId = auth.tenantId!;
-  const isCompanyWide = hasTenantWideScope(auth, "SALES.QUOTATIONS.VIEW_ALL");
-  const conditions = [eq(salesInvoices.tenantId, tenantId)];
+  const scopeCtx = await resolveSalesScope(auth, false);
+  const conditions = [
+    eq(salesInvoices.tenantId, tenantId),
+    ...applySalesOwnerFilter(
+      scopeCtx,
+      auth,
+      undefined,
+      salesInvoices.ownerUserId,
+      salesInvoices.createdBy,
+    ),
+  ];
 
-  if (!isCompanyWide) {
-    conditions.push(or(eq(salesInvoices.ownerUserId, auth.userId), eq(salesInvoices.createdBy, auth.userId))!);
-  }
   if (query.status) conditions.push(eq(salesInvoices.status, query.status));
   if (query.customerId) conditions.push(eq(salesInvoices.customerId, query.customerId));
 
@@ -770,6 +1259,7 @@ export async function listSalesInvoices(auth: AuthContext, query: SalesInvoicesQ
   const total = totalRow?.count ?? 0;
 
   return {
+    scope: scopeCtx.scope,
     invoices: rows.map((r) => ({
       ...r.invoice,
       customerName: r.customerName ?? null,
@@ -824,6 +1314,7 @@ export async function createSalesInvoice(
     throw Errors.badRequest("Kam se kam 1 line item ya valid orderId dein.");
   }
 
+  await assertLineItemProductsExist(tenantId, itemsToUse);
   const calc = computeOrderTotals(itemsToUse);
   const invoiceNo = `INV-${new Date().getFullYear()}-${String(Date.now()).slice(-6)}`;
 
@@ -882,6 +1373,8 @@ export async function createSalesInvoice(
 
 export async function getSalesInvoiceDetail(auth: AuthContext, invoiceId: string) {
   const tenantId = auth.tenantId!;
+  const scopeCtx = await resolveSalesScope(auth, false);
+
   const [row] = await db
     .select({ invoice: salesInvoices, customerName: crmCustomers.name })
     .from(salesInvoices)
@@ -890,6 +1383,8 @@ export async function getSalesInvoiceDetail(auth: AuthContext, invoiceId: string
     .limit(1);
 
   if (!row) throw Errors.notFound("Invoice not found.");
+
+  assertSalesRecordAccess(scopeCtx, row.invoice.ownerUserId, row.invoice.createdBy, auth.userId, "invoice");
 
   const [items, payments] = await Promise.all([
     db.select().from(salesInvoiceItems).where(eq(salesInvoiceItems.invoiceId, invoiceId)),
@@ -921,7 +1416,7 @@ export async function getSalesInvoiceDetail(auth: AuthContext, invoiceId: string
   };
 }
 
-// Record Invoice Payment (Rule #3: Server-side balance & status calculation + Rule #4: Transaction & Audit)
+// Record Invoice Payment (Server-side balance & status calculation + Transaction & Audit)
 export async function recordInvoicePayment(
   auth: AuthContext,
   invoiceId: string,

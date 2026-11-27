@@ -14,6 +14,7 @@ export const coreSalesDoc = {
         security: [{ bearerAuth: [] }],
         parameters: [
           { name: "itemType", in: "query", schema: { type: "string", enum: ["PRODUCT", "SERVICE"] } },
+          { name: "status", in: "query", schema: { type: "string", enum: ["ACTIVE", "INACTIVE"] } },
           { name: "isActive", in: "query", schema: { type: "string", enum: ["true", "false"] } },
           { name: "search", in: "query", schema: { type: "string" } },
           { name: "page", in: "query", schema: { type: "integer", default: 1 } },
@@ -52,11 +53,12 @@ export const coreSalesDoc = {
     "/api/v1/sales/quotations": {
       get: {
         tags: ["[Core] Sales (Catalogue, Quotes, Orders & Invoices)"],
-        summary: "List quotations",
+        summary: "List quotations (3-tier scoped: Company / Sales Team / Executive)",
         security: [{ bearerAuth: [] }],
         parameters: [
           { name: "status", in: "query", schema: { type: "string" } },
           { name: "customerId", in: "query", schema: { type: "string", format: "uuid" } },
+          { name: "created_by", in: "query", schema: { type: "string", format: "uuid" } },
           { name: "page", in: "query", schema: { type: "integer", default: 1 } },
           { name: "limit", in: "query", schema: { type: "integer", default: 20 } },
         ],
@@ -87,41 +89,93 @@ export const coreSalesDoc = {
     "/api/v1/sales/quotations/{id}/approve": {
       post: {
         tags: ["[Core] Sales (Catalogue, Quotes, Orders & Invoices)"],
-        summary: "Approve quotation",
+        summary: "Approve quotation (audit logged & notifies creator)",
         security: [{ bearerAuth: [] }],
         parameters: [
           { name: "id", in: "path", required: true, schema: { type: "string", format: "uuid" } },
           { name: "Idempotency-Key", in: "header", schema: { type: "string" } },
         ],
+        requestBody: {
+          required: false,
+          content: {
+            "application/json": {
+              schema: {
+                type: "object",
+                properties: {
+                  comment: { type: "string", example: "Discount approved for Q4 deal" },
+                },
+              },
+            },
+          },
+        },
         responses: { "200": { description: "Quotation approved" } },
       },
     },
     "/api/v1/sales/quotations/{id}/send": {
       post: {
         tags: ["[Core] Sales (Catalogue, Quotes, Orders & Invoices)"],
-        summary: "Send quotation to customer",
+        summary: "Generate PDF metadata and send quotation to customer",
         security: [{ bearerAuth: [] }],
         parameters: [{ name: "id", in: "path", required: true, schema: { type: "string", format: "uuid" } }],
+        requestBody: {
+          required: false,
+          content: {
+            "application/json": {
+              schema: {
+                type: "object",
+                properties: {
+                  recipientEmail: { type: "string", format: "email" },
+                  deliveryChannel: { type: "string", enum: ["EMAIL", "PDF_LINK", "WHATSAPP"], default: "EMAIL" },
+                  message: { type: "string" },
+                },
+              },
+            },
+          },
+        },
         responses: { "200": { description: "Quotation sent" } },
       },
     },
     "/api/v1/sales/quotations/{id}/convert-order": {
       post: {
         tags: ["[Core] Sales (Catalogue, Quotes, Orders & Invoices)"],
-        summary: "Convert quotation to Sales Order (Idempotent)",
+        summary: "Convert quotation to Sales Order (Atomic Duplicate Guard + Idempotent)",
         security: [{ bearerAuth: [] }],
         parameters: [
           { name: "id", in: "path", required: true, schema: { type: "string", format: "uuid" } },
           { name: "Idempotency-Key", in: "header", schema: { type: "string" } },
         ],
-        responses: { "201": { description: "Sales Order created from quotation" } },
+        requestBody: {
+          required: false,
+          content: {
+            "application/json": {
+              schema: {
+                type: "object",
+                properties: {
+                  orderDate: { type: "string", format: "date", example: "2026-11-27" },
+                  notes: { type: "string" },
+                },
+              },
+            },
+          },
+        },
+        responses: {
+          "201": { description: "Sales Order created from quotation" },
+          "409": { description: "Duplicate conversion blocked (Sales Order already exists for quotation)" },
+        },
       },
     },
     "/api/v1/sales/orders": {
       get: {
         tags: ["[Core] Sales (Catalogue, Quotes, Orders & Invoices)"],
-        summary: "List sales orders",
+        summary: "List sales orders (3-tier scoped: Company / Sales Team / Executive)",
         security: [{ bearerAuth: [] }],
+        parameters: [
+          { name: "status", in: "query", schema: { type: "string" } },
+          { name: "customerId", in: "query", schema: { type: "string", format: "uuid" } },
+          { name: "owner_user_id", in: "query", schema: { type: "string", format: "uuid" } },
+          { name: "page", in: "query", schema: { type: "integer", default: 1 } },
+          { name: "limit", in: "query", schema: { type: "integer", default: 20 } },
+        ],
         responses: { "200": { description: "Sales orders list" } },
       },
       post: {

@@ -17,6 +17,7 @@ import {
   getCrmPipelineHandler,
   getCustomerDetailHandler,
   getLeadDetailHandler,
+  importLeadsHandler,
   listCustomersHandler,
   listLeadsHandler,
   updateFollowupHandler,
@@ -30,17 +31,26 @@ router.get(
   "/pipeline",
   jwtAuthGuard,
   entitlementGuard("CRM"),
-  permissionsGuard("CRM.LEADS.VIEW", "CRM.LEADS.VIEW_ALL"),
+  permissionsGuard("CRM.LEADS.VIEW", "CRM.LEADS.VIEW_TEAM", "CRM.LEADS.VIEW_ALL"),
   getCrmPipelineHandler,
 );
 
-// Leads CRUD & workflow
+// Leads CRUD, import & workflow
 router.get(
   "/leads",
   jwtAuthGuard,
   entitlementGuard("CRM"),
-  permissionsGuard("CRM.LEADS.VIEW", "CRM.LEADS.VIEW_ALL"),
+  permissionsGuard("CRM.LEADS.VIEW", "CRM.LEADS.VIEW_TEAM", "CRM.LEADS.VIEW_ALL"),
   listLeadsHandler,
+);
+
+router.post(
+  "/import",
+  jwtAuthGuard,
+  entitlementGuard("CRM"),
+  permissionsGuard("CRM.LEADS.MANAGE"),
+  idempotencyGuard,
+  importLeadsHandler,
 );
 
 router.post(
@@ -55,7 +65,7 @@ router.get(
   "/leads/:id",
   jwtAuthGuard,
   entitlementGuard("CRM"),
-  permissionsGuard("CRM.LEADS.VIEW", "CRM.LEADS.VIEW_ALL"),
+  permissionsGuard("CRM.LEADS.VIEW", "CRM.LEADS.VIEW_TEAM", "CRM.LEADS.VIEW_ALL"),
   getLeadDetailHandler,
 );
 
@@ -113,7 +123,12 @@ router.get(
   "/customers",
   jwtAuthGuard,
   entitlementGuard("CRM"),
-  permissionsGuard("CRM.CUSTOMERS.VIEW", "CRM.LEADS.VIEW_ALL"),
+  permissionsGuard(
+    "CRM.CUSTOMERS.VIEW",
+    "CRM.CUSTOMERS.VIEW_TEAM",
+    "CRM.LEADS.VIEW_TEAM",
+    "CRM.LEADS.VIEW_ALL",
+  ),
   listCustomersHandler,
 );
 
@@ -129,7 +144,12 @@ router.get(
   "/customers/:id",
   jwtAuthGuard,
   entitlementGuard("CRM"),
-  permissionsGuard("CRM.CUSTOMERS.VIEW", "CRM.LEADS.VIEW_ALL"),
+  permissionsGuard(
+    "CRM.CUSTOMERS.VIEW",
+    "CRM.CUSTOMERS.VIEW_TEAM",
+    "CRM.LEADS.VIEW_TEAM",
+    "CRM.LEADS.VIEW_ALL",
+  ),
   getCustomerDetailHandler,
 );
 

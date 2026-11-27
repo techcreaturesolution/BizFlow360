@@ -3,6 +3,8 @@ import type { RequestHandler } from "express";
 import { Errors } from "../../lib/errors";
 import { sendSuccess } from "../../lib/response";
 import {
+  approveQuotationSchema,
+  convertQuotationOrderSchema,
   createOrderSchema,
   createProductSchema,
   createQuotationSchema,
@@ -12,6 +14,7 @@ import {
   quotationsQuerySchema,
   recordPaymentSchema,
   salesInvoicesQuerySchema,
+  sendQuotationSchema,
   updateProductSchema,
 } from "./sales.model";
 import {
@@ -82,19 +85,22 @@ export const getQuotationDetailHandler: RequestHandler = async (req, res) => {
 
 export const approveQuotationHandler: RequestHandler = async (req, res) => {
   const auth = requireAuthTenant(req);
-  const result = await approveQuotation(auth, req.params.id as string, req.requestId);
+  const input = approveQuotationSchema.parse(req.body ?? {});
+  const result = await approveQuotation(auth, req.params.id as string, input, req.requestId);
   return sendSuccess(res, result);
 };
 
 export const sendQuotationHandler: RequestHandler = async (req, res) => {
   const auth = requireAuthTenant(req);
-  const result = await sendQuotation(auth, req.params.id as string, req.requestId);
+  const input = sendQuotationSchema.parse(req.body ?? {});
+  const result = await sendQuotation(auth, req.params.id as string, input, req.requestId);
   return sendSuccess(res, result);
 };
 
 export const convertQuotationToOrderHandler: RequestHandler = async (req, res) => {
   const auth = requireAuthTenant(req);
-  const result = await convertQuotationToOrder(auth, req.params.id as string, req.requestId);
+  const input = convertQuotationOrderSchema.parse(req.body ?? {});
+  const result = await convertQuotationToOrder(auth, req.params.id as string, input, req.requestId);
   return sendSuccess(res, result, { status: 201 });
 };
 

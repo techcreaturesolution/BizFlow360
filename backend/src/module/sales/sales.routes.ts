@@ -57,7 +57,7 @@ router.get(
   "/quotations",
   jwtAuthGuard,
   entitlementGuard("SALES"),
-  permissionsGuard("SALES.QUOTATIONS.VIEW", "SALES.QUOTATIONS.VIEW_ALL"),
+  permissionsGuard("SALES.QUOTATIONS.VIEW", "SALES.QUOTATIONS.VIEW_TEAM", "SALES.QUOTATIONS.VIEW_ALL"),
   listQuotationsHandler,
 );
 
@@ -73,7 +73,7 @@ router.get(
   "/quotations/:id",
   jwtAuthGuard,
   entitlementGuard("SALES"),
-  permissionsGuard("SALES.QUOTATIONS.VIEW", "SALES.QUOTATIONS.VIEW_ALL"),
+  permissionsGuard("SALES.QUOTATIONS.VIEW", "SALES.QUOTATIONS.VIEW_TEAM", "SALES.QUOTATIONS.VIEW_ALL"),
   getQuotationDetailHandler,
 );
 
@@ -108,7 +108,12 @@ router.get(
   "/orders",
   jwtAuthGuard,
   entitlementGuard("SALES"),
-  permissionsGuard("SALES.ORDERS.VIEW", "SALES.QUOTATIONS.VIEW_ALL"),
+  permissionsGuard(
+    "SALES.ORDERS.VIEW",
+    "SALES.ORDERS.VIEW_TEAM",
+    "SALES.QUOTATIONS.VIEW_TEAM",
+    "SALES.QUOTATIONS.VIEW_ALL",
+  ),
   listOrdersHandler,
 );
 
@@ -125,7 +130,11 @@ router.get(
   "/invoices",
   jwtAuthGuard,
   entitlementGuard("SALES"),
-  permissionsGuard("FINANCE.INVOICES.VIEW", "SALES.QUOTATIONS.VIEW_ALL"),
+  permissionsGuard(
+    "FINANCE.INVOICES.VIEW",
+    "SALES.QUOTATIONS.VIEW_TEAM",
+    "SALES.QUOTATIONS.VIEW_ALL",
+  ),
   listSalesInvoicesHandler,
 );
 
@@ -141,7 +150,11 @@ router.get(
   "/invoices/:id",
   jwtAuthGuard,
   entitlementGuard("SALES"),
-  permissionsGuard("FINANCE.INVOICES.VIEW", "SALES.QUOTATIONS.VIEW_ALL"),
+  permissionsGuard(
+    "FINANCE.INVOICES.VIEW",
+    "SALES.QUOTATIONS.VIEW_TEAM",
+    "SALES.QUOTATIONS.VIEW_ALL",
+  ),
   getSalesInvoiceDetailHandler,
 );
 

@@ -41,6 +41,7 @@ export const dashboardReportsDoc = {
           { name: "period", in: "query", schema: { type: "string", enum: ["TODAY", "7D", "30D", "90D", "YTD", "CUSTOM"], default: "30D" } },
           { name: "branch_id", in: "query", schema: { type: "string", format: "uuid" } },
           { name: "department_id", in: "query", schema: { type: "string", format: "uuid" } },
+          { name: "owner_user_id", in: "query", schema: { type: "string", format: "uuid" } },
         ],
         responses: {
           "200": { description: "Sales analytics metrics and charts" },
@@ -59,6 +60,7 @@ export const dashboardReportsDoc = {
           { name: "period", in: "query", schema: { type: "string", enum: ["TODAY", "7D", "30D", "90D", "YTD", "CUSTOM"], default: "30D" } },
           { name: "branch_id", in: "query", schema: { type: "string", format: "uuid" } },
           { name: "department_id", in: "query", schema: { type: "string", format: "uuid" } },
+          { name: "owner_user_id", in: "query", schema: { type: "string", format: "uuid" } },
         ],
         responses: {
           "200": { description: "Finance analytics metrics and charts" },
@@ -77,6 +79,7 @@ export const dashboardReportsDoc = {
           { name: "period", in: "query", schema: { type: "string", enum: ["TODAY", "7D", "30D", "90D", "YTD", "CUSTOM"], default: "30D" } },
           { name: "branch_id", in: "query", schema: { type: "string", format: "uuid" } },
           { name: "department_id", in: "query", schema: { type: "string", format: "uuid" } },
+          { name: "owner_user_id", in: "query", schema: { type: "string", format: "uuid" } },
         ],
         responses: {
           "200": { description: "HR analytics metrics and charts" },
@@ -95,6 +98,7 @@ export const dashboardReportsDoc = {
           { name: "period", in: "query", schema: { type: "string", enum: ["TODAY", "7D", "30D", "90D", "YTD", "CUSTOM"], default: "30D" } },
           { name: "branch_id", in: "query", schema: { type: "string", format: "uuid" } },
           { name: "department_id", in: "query", schema: { type: "string", format: "uuid" } },
+          { name: "owner_user_id", in: "query", schema: { type: "string", format: "uuid" } },
         ],
         responses: {
           "200": { description: "Projects analytics metrics and charts" },

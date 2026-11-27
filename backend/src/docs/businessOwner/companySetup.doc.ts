@@ -289,6 +289,11 @@ export const companySetupDoc = {
           type: "object",
           example: { enableMultiBranch: true, defaultTaxRate: 18 },
         },
+        expenseApprovalThreshold: {
+          type: "number",
+          example: 5000,
+          description: "Expense threshold above which manager approvals escalate to Finance review",
+        },
       },
     },
     CompanyProfileResponse: {
@@ -314,6 +319,7 @@ export const companySetupDoc = {
                 financialYear: { type: "string" },
                 numberingPreferences: { type: "object", nullable: true },
                 modulePreferences: { type: "object", nullable: true },
+                expenseApprovalThreshold: { type: "number", example: 5000 },
                 status: { type: "string" },
               },
             },

@@ -3,27 +3,59 @@ export const coreCrmDoc = {
   tags: [
     {
       name: "[Core] CRM (Leads & Customers)",
-      description: "Company-wide for Owner/Admin; assigned-record scoped for Sales Executives (Entitlement: CRM)",
+      description:
+        "3-tier scoped: Company-wide for Owner/Admin, sales team/department scoped for Sales Manager, and own-assigned for Sales Executive (Entitlement: CRM)",
     },
   ],
   paths: {
     "/api/v1/crm/pipeline": {
       get: {
         tags: ["[Core] CRM (Leads & Customers)"],
-        summary: "Get CRM leads pipeline summary",
+        summary: "Get CRM leads Kanban pipeline with deal cards and aging",
         security: [{ bearerAuth: [] }],
-        responses: { "200": { description: "Stage-wise lead counts and values" } },
+        parameters: [
+          { name: "owner_user_id", in: "query", schema: { type: "string", format: "uuid" } },
+          { name: "period", in: "query", schema: { type: "string", enum: ["TODAY", "7D", "30D", "90D", "YTD", "ALL"], default: "ALL" } },
+        ],
+        responses: { "200": { description: "Stage-wise lead counts, totals, and Kanban deal cards with agingDays" } },
+      },
+    },
+    "/api/v1/crm/import": {
+      post: {
+        tags: ["[Core] CRM (Leads & Customers)"],
+        summary: "Bulk import CRM leads from CSV or row array (P1)",
+        description: "Detects duplicate email/phone within tenant, validates team/tenant assignees, and returns import report.",
+        security: [{ bearerAuth: [] }],
+        parameters: [{ name: "Idempotency-Key", in: "header", schema: { type: "string" } }],
+        requestBody: {
+          required: true,
+          content: {
+            "application/json": {
+              schema: {
+                type: "object",
+                properties: {
+                  csvText: { type: "string", example: "name,companyName,email,phone,source,estimatedValue\nRahul Sharma,Sharma Corp,rahul@sharma.in,+919898989898,Website,75000" },
+                  rows: { type: "array", items: { type: "object" } },
+                  mapping: { type: "object" },
+                  defaultOwnerUserId: { type: "string", format: "uuid" },
+                },
+              },
+            },
+          },
+        },
+        responses: { "201": { description: "Bulk import report with imported/duplicate/error counts" } },
       },
     },
     "/api/v1/crm/leads": {
       get: {
         tags: ["[Core] CRM (Leads & Customers)"],
-        summary: "List CRM leads (company-wide for Owner, assigned-only for Executive)",
+        summary: "List CRM leads (3-tier scoped: Company / Sales Team / Executive)",
         security: [{ bearerAuth: [] }],
         parameters: [
           { name: "stage", in: "query", schema: { type: "string", enum: ["NEW", "CONTACTED", "QUALIFIED", "PROPOSAL", "NEGOTIATION", "WON", "LOST"] } },
           { name: "priority", in: "query", schema: { type: "string", enum: ["LOW", "MEDIUM", "HIGH", "URGENT"] } },
-          { name: "ownerUserId", in: "query", schema: { type: "string", format: "uuid" } },
+          { name: "source", in: "query", schema: { type: "string" } },
+          { name: "owner_user_id", in: "query", schema: { type: "string", format: "uuid" } },
           { name: "search", in: "query", schema: { type: "string" } },
           { name: "page", in: "query", schema: { type: "integer", default: 1 } },
           { name: "limit", in: "query", schema: { type: "integer", default: 20 } },
@@ -222,10 +254,10 @@ export const coreCrmDoc = {
     "/api/v1/crm/customers/{id}": {
       get: {
         tags: ["[Core] CRM (Leads & Customers)"],
-        summary: "Get customer details",
+        summary: "Get customer details, contacts, billing addresses & sales timeline (quotes, orders, invoices, activities)",
         security: [{ bearerAuth: [] }],
         parameters: [{ name: "id", in: "path", required: true, schema: { type: "string", format: "uuid" } }],
-        responses: { "200": { description: "Customer profile" } },
+        responses: { "200": { description: "Customer profile, contacts, addresses and sales timeline" } },
       },
     },
   },

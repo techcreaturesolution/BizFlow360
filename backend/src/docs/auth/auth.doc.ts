@@ -430,6 +430,19 @@ export const authDoc = {
               items: { type: "string" },
               example: ["*", "AUTH.USERS.VIEW", "CRM.LEADS.MANAGE"],
             },
+            enabledModules: {
+              type: "array",
+              items: { type: "string" },
+              example: ["CRM", "SALES", "TASKS", "DOCUMENTS", "REPORTS"],
+            },
+            managedDepartmentIds: {
+              type: "array",
+              items: { type: "string", format: "uuid" },
+            },
+            managedTeamIds: {
+              type: "array",
+              items: { type: "string", format: "uuid" },
+            },
           },
         },
       },

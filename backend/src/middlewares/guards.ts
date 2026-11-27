@@ -289,7 +289,7 @@ export async function resolveRecordScope(
   }
 
   const isManager =
-    auth.roles.includes("MANAGER") ||
+    auth.roles.some((r) => r === "MANAGER" || r === "SALES_MANAGER" || r.endsWith("_MANAGER")) ||
     (teamPermission ? auth.permissions.includes(teamPermission) : false);
 
   if (!isManager || !auth.tenantId) {

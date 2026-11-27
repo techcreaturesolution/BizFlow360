@@ -31,8 +31,10 @@ export const STANDARD_PERMISSIONS = [
 
   // Dashboard & Reports
   { code: "REPORTS.DASHBOARD.VIEW", moduleCode: "REPORTS", description: "View company overview KPIs and dashboard widgets" },
+  { code: "REPORTS.DASHBOARD.VIEW_TEAM", moduleCode: "REPORTS", description: "View team/department overview KPIs and pipeline metrics" },
   { code: "REPORTS.DASHBOARD.MANAGE", moduleCode: "REPORTS", description: "Customize and save personal dashboard widget layouts" },
-  { code: "REPORTS.ANALYTICS.VIEW", moduleCode: "REPORTS", description: "View department-wise analytics across enabled modules" },
+  { code: "REPORTS.ANALYTICS.VIEW", moduleCode: "REPORTS", description: "View analytics across enabled modules" },
+  { code: "REPORTS.ANALYTICS.VIEW_TEAM", moduleCode: "REPORTS", description: "View team/department analytics across enabled modules" },
   { code: "REPORTS.EXPORT.CREATE", moduleCode: "REPORTS", description: "Trigger async CSV, XLSX, and PDF report exports" },
 
   // Tenant Subscription & Billing
@@ -40,26 +42,31 @@ export const STANDARD_PERMISSIONS = [
   { code: "BILLING.SUBSCRIPTION.MANAGE", moduleCode: "BILLING", description: "Start checkout, change plans, and cancel subscription" },
 
   // Notifications & Audit
-  { code: "APPROVALS.INBOX.VIEW", moduleCode: "APPROVALS", description: "View pending quotation, expense, and purchase approval queue" },
+  { code: "APPROVALS.INBOX.VIEW", moduleCode: "APPROVALS", description: "View own pending approval queue" },
+  { code: "APPROVALS.INBOX.VIEW_TEAM", moduleCode: "APPROVALS", description: "View pending quotation, expense, and purchase approvals for team/department" },
   { code: "APPROVALS.INBOX.DECIDE", moduleCode: "APPROVALS", description: "Approve or reject pending approval requests" },
   { code: "NOTIFICATIONS.ALERTS.VIEW", moduleCode: "NOTIFICATIONS", description: "View in-app notifications and manage alert preferences" },
   { code: "AUDIT.LOGS.VIEW", moduleCode: "AUDIT", description: "View company-level audit trail logs" },
 
   // CRM
   { code: "CRM.LEADS.VIEW", moduleCode: "CRM", description: "View assigned CRM leads" },
+  { code: "CRM.LEADS.VIEW_TEAM", moduleCode: "CRM", description: "View CRM leads assigned to own sales team or department" },
   { code: "CRM.LEADS.VIEW_ALL", moduleCode: "CRM", description: "View all company-wide CRM leads" },
   { code: "CRM.LEADS.MANAGE", moduleCode: "CRM", description: "Create, edit, assign and convert CRM leads" },
   { code: "CRM.CUSTOMERS.VIEW", moduleCode: "CRM", description: "View customer records" },
+  { code: "CRM.CUSTOMERS.VIEW_TEAM", moduleCode: "CRM", description: "View customers managed by own sales team or department" },
   { code: "CRM.CUSTOMERS.MANAGE", moduleCode: "CRM", description: "Create and update customer records" },
 
   // Sales
   { code: "SALES.PRODUCTS.VIEW", moduleCode: "SALES", description: "View products and services catalogue" },
   { code: "SALES.PRODUCTS.MANAGE", moduleCode: "SALES", description: "Create and update products/services" },
   { code: "SALES.QUOTATIONS.VIEW", moduleCode: "SALES", description: "View assigned sales quotations" },
+  { code: "SALES.QUOTATIONS.VIEW_TEAM", moduleCode: "SALES", description: "View quotations created by own sales team or department" },
   { code: "SALES.QUOTATIONS.VIEW_ALL", moduleCode: "SALES", description: "View all company-wide quotations" },
   { code: "SALES.QUOTATIONS.MANAGE", moduleCode: "SALES", description: "Create, send and convert quotations to orders" },
   { code: "SALES.QUOTATIONS.APPROVE", moduleCode: "SALES", description: "Approve sales quotations" },
   { code: "SALES.ORDERS.VIEW", moduleCode: "SALES", description: "View sales orders" },
+  { code: "SALES.ORDERS.VIEW_TEAM", moduleCode: "SALES", description: "View sales orders managed by own sales team or department" },
   { code: "SALES.ORDERS.MANAGE", moduleCode: "SALES", description: "Create and manage sales orders" },
 
   // Finance & Billing
@@ -155,6 +162,16 @@ export async function initializeTenantDefaults(
     })
     .returning();
 
+  const [salesManagerRole] = await executor
+    .insert(roles)
+    .values({
+      tenantId,
+      name: "SALES_MANAGER",
+      description: "Sales Team Manager with scoped pipeline, leads, customers, quotations, orders, approvals, tasks, documents and sales reports",
+      isSystem: true,
+    })
+    .returning();
+
   const [memberRole] = await executor
     .insert(roles)
     .values({
@@ -181,6 +198,7 @@ export async function initializeTenantDefaults(
 
   const MANAGER_DEFAULT_CODES = new Set([
     "APPROVALS.INBOX.VIEW",
+    "APPROVALS.INBOX.VIEW_TEAM",
     "APPROVALS.INBOX.DECIDE",
     "TASKS.TASKS.VIEW",
     "TASKS.TASKS.VIEW_TEAM",
@@ -194,7 +212,9 @@ export async function initializeTenantDefaults(
     "DOCUMENTS.FILES.VIEW",
     "DOCUMENTS.FILES.MANAGE",
     "REPORTS.DASHBOARD.VIEW",
+    "REPORTS.DASHBOARD.VIEW_TEAM",
     "REPORTS.ANALYTICS.VIEW",
+    "REPORTS.ANALYTICS.VIEW_TEAM",
     "REPORTS.EXPORT.CREATE",
     "NOTIFICATIONS.ALERTS.VIEW",
   ]);
@@ -203,6 +223,48 @@ export async function initializeTenantDefaults(
     await executor.insert(rolePermissions).values(
       managerPerms.map((p) => ({
         roleId: managerRole.id,
+        permissionId: p.id,
+      })),
+    );
+  }
+
+  const SALES_MANAGER_DEFAULT_CODES = new Set([
+    "REPORTS.DASHBOARD.VIEW",
+    "REPORTS.DASHBOARD.VIEW_TEAM",
+    "REPORTS.ANALYTICS.VIEW",
+    "REPORTS.ANALYTICS.VIEW_TEAM",
+    "REPORTS.EXPORT.CREATE",
+    "CRM.LEADS.VIEW",
+    "CRM.LEADS.VIEW_TEAM",
+    "CRM.LEADS.MANAGE",
+    "CRM.CUSTOMERS.VIEW",
+    "CRM.CUSTOMERS.VIEW_TEAM",
+    "CRM.CUSTOMERS.MANAGE",
+    "SALES.PRODUCTS.VIEW",
+    "SALES.QUOTATIONS.VIEW",
+    "SALES.QUOTATIONS.VIEW_TEAM",
+    "SALES.QUOTATIONS.MANAGE",
+    "SALES.QUOTATIONS.APPROVE",
+    "SALES.ORDERS.VIEW",
+    "SALES.ORDERS.VIEW_TEAM",
+    "SALES.ORDERS.MANAGE",
+    "APPROVALS.INBOX.VIEW",
+    "APPROVALS.INBOX.VIEW_TEAM",
+    "APPROVALS.INBOX.DECIDE",
+    "TASKS.TASKS.VIEW",
+    "TASKS.TASKS.VIEW_TEAM",
+    "TASKS.TASKS.MANAGE",
+    "AUTH.USERS.VIEW_TEAM",
+    "ORG.TEAMS.VIEW",
+    "DOCUMENTS.FILES.VIEW",
+    "DOCUMENTS.FILES.MANAGE",
+    "NOTIFICATIONS.ALERTS.VIEW",
+  ]);
+  const salesManagerPerms = allPerms.filter((p) => SALES_MANAGER_DEFAULT_CODES.has(p.code));
+  if (salesManagerRole && salesManagerPerms.length > 0) {
+    await executor.insert(rolePermissions).values(
+      salesManagerPerms.map((p) => ({
+        roleId: salesManagerRole.id,
         permissionId: p.id,
       })),
     );

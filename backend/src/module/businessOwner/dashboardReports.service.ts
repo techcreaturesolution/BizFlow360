@@ -1,16 +1,23 @@
 // Dashboard & Reports Service: Overview KPIs, Module Analytics, Async Exports & Saved Widgets.
-import { and, desc, eq, gte, inArray, isNull, lte, or, sql } from "drizzle-orm";
+import { and, desc, eq, gte, inArray, isNull, lt, lte, or, sql } from "drizzle-orm";
 import { db } from "../../db";
 import {
   approvalRequests,
   auditLogs,
   branches,
+  crmCustomers,
+  crmLeadFollowups,
   crmLeads,
   dashboardWidgets,
   departments,
   financeExpenses,
+  LEAD_STAGES,
   reportExportJobs,
   salesInvoices,
+  salesOrderItems,
+  salesOrders,
+  salesProducts,
+  salesQuotations,
   subscriptionInvoices,
   tasks,
   teams,
@@ -80,7 +87,7 @@ const DEFAULT_DASHBOARD_WIDGETS: DashboardWidgetConfig[] = [
 // ==========================================
 export async function getDashboardSummary(auth: AuthContext, query: DashboardSummaryQuery) {
   const tenantId = auth.tenantId!;
-  const scopeCtx = await resolveRecordScope(auth, "REPORTS.DASHBOARD.VIEW_ALL", "REPORTS.DASHBOARD.VIEW");
+  const scopeCtx = await resolveRecordScope(auth, "REPORTS.DASHBOARD.VIEW_ALL", "REPORTS.DASHBOARD.VIEW_TEAM");
   const range = resolveDateRange(query.period, query.from, query.to);
   const branchId = query.branch_id ?? query.branchId;
   const departmentId = query.department_id ?? query.departmentId;
@@ -92,6 +99,17 @@ export async function getDashboardSummary(auth: AuthContext, query: DashboardSum
     !scopeCtx.departmentIds.includes(departmentId)
   ) {
     throw Errors.forbidden("You do not have permission to view another department's dashboard metrics.");
+  }
+
+  if (
+    scopeCtx.scope === "TEAM_DEPARTMENT" &&
+    ownerUserId &&
+    !scopeCtx.teamUserIds.includes(ownerUserId)
+  ) {
+    throw Errors.forbidden("You do not have permission to view metrics for a user outside your team.");
+  }
+  if (scopeCtx.scope === "OWN_ONLY" && ownerUserId && ownerUserId !== auth.userId) {
+    throw Errors.forbidden("You can only view your own dashboard metrics.");
   }
 
   const [tenant] = await db
@@ -171,6 +189,57 @@ export async function getDashboardSummary(auth: AuthContext, query: DashboardSum
     approvalConditions.push(eq(approvalRequests.requestedBy, auth.userId));
   }
 
+  const leadConditions = [
+    eq(crmLeads.tenantId, tenantId),
+    gte(crmLeads.createdAt, range.start),
+    lte(crmLeads.createdAt, range.end),
+  ];
+  if (ownerUserId) {
+    leadConditions.push(eq(crmLeads.ownerUserId, ownerUserId));
+  } else if (scopeCtx.scope === "TEAM_DEPARTMENT") {
+    leadConditions.push(
+      or(
+        inArray(crmLeads.ownerUserId, scopeCtx.teamUserIds),
+        inArray(crmLeads.createdBy, scopeCtx.teamUserIds),
+      )!,
+    );
+  } else if (scopeCtx.scope === "OWN_ONLY") {
+    leadConditions.push(or(eq(crmLeads.ownerUserId, auth.userId), eq(crmLeads.createdBy, auth.userId))!);
+  }
+
+  const invoiceConditions = [
+    eq(salesInvoices.tenantId, tenantId),
+    gte(salesInvoices.createdAt, range.start),
+    lte(salesInvoices.createdAt, range.end),
+  ];
+  if (ownerUserId) {
+    invoiceConditions.push(eq(salesInvoices.ownerUserId, ownerUserId));
+  } else if (scopeCtx.scope === "TEAM_DEPARTMENT") {
+    invoiceConditions.push(
+      or(
+        inArray(salesInvoices.ownerUserId, scopeCtx.teamUserIds),
+        inArray(salesInvoices.createdBy, scopeCtx.teamUserIds),
+      )!,
+    );
+  } else if (scopeCtx.scope === "OWN_ONLY") {
+    invoiceConditions.push(
+      or(eq(salesInvoices.ownerUserId, auth.userId), eq(salesInvoices.createdBy, auth.userId))!,
+    );
+  }
+
+  const followupConditions = [
+    eq(crmLeadFollowups.tenantId, tenantId),
+    eq(crmLeadFollowups.status, "PENDING"),
+    lt(crmLeadFollowups.scheduledAt, new Date()),
+  ];
+  if (ownerUserId) {
+    followupConditions.push(eq(crmLeadFollowups.assignedToUserId, ownerUserId));
+  } else if (scopeCtx.scope === "TEAM_DEPARTMENT") {
+    followupConditions.push(inArray(crmLeadFollowups.assignedToUserId, scopeCtx.teamUserIds));
+  } else if (scopeCtx.scope === "OWN_ONLY") {
+    followupConditions.push(eq(crmLeadFollowups.assignedToUserId, auth.userId));
+  }
+
   const [
     allMemberships,
     [pendingInvitesRow],
@@ -186,6 +255,7 @@ export async function getDashboardSummary(auth: AuthContext, query: DashboardSum
     expenseStats,
     taskRows,
     [pendingApprovalsRow],
+    [overdueFollowupsRow],
   ] = await Promise.all([
     db
       .select({
@@ -257,14 +327,7 @@ export async function getDashboardSummary(auth: AuthContext, query: DashboardSum
         estimatedValue: crmLeads.estimatedValue,
       })
       .from(crmLeads)
-      .where(
-        and(
-          eq(crmLeads.tenantId, tenantId),
-          gte(crmLeads.createdAt, range.start),
-          lte(crmLeads.createdAt, range.end),
-          ...(ownerUserId ? [eq(crmLeads.ownerUserId, ownerUserId)] : []),
-        ),
-      ),
+      .where(and(...leadConditions)),
     db
       .select({
         invoiced: sql<string>`coalesce(sum(${salesInvoices.grandTotal}), '0.00')`,
@@ -272,13 +335,7 @@ export async function getDashboardSummary(auth: AuthContext, query: DashboardSum
         balanceDue: sql<string>`coalesce(sum(${salesInvoices.balanceDue}), '0.00')`,
       })
       .from(salesInvoices)
-      .where(
-        and(
-          eq(salesInvoices.tenantId, tenantId),
-          gte(salesInvoices.createdAt, range.start),
-          lte(salesInvoices.createdAt, range.end),
-        ),
-      ),
+      .where(and(...invoiceConditions)),
     db
       .select({
         status: financeExpenses.status,
@@ -297,6 +354,10 @@ export async function getDashboardSummary(auth: AuthContext, query: DashboardSum
       .select({ count: sql<number>`count(*)::int` })
       .from(approvalRequests)
       .where(and(...approvalConditions)),
+    db
+      .select({ count: sql<number>`count(*)::int` })
+      .from(crmLeadFollowups)
+      .where(and(...followupConditions)),
   ]);
 
   const activeUsersCount = allMemberships.filter((m) => m.status === "ACTIVE").length;
@@ -332,6 +393,15 @@ export async function getDashboardSummary(auth: AuthContext, query: DashboardSum
   const totalPipelineVal = openLeads.reduce((sum, l) => sum + Number(l.estimatedValue), 0);
   const conversionRate =
     leadRows.length > 0 ? Number(((wonLeads.length / leadRows.length) * 100).toFixed(1)) : 0;
+  const leadsByStageSummary = LEAD_STAGES.map((stage) => {
+    const stageRows = leadRows.filter((l) => l.stage === stage);
+    return {
+      stage,
+      count: stageRows.length,
+      totalValue: Number(stageRows.reduce((s, l) => s + Number(l.estimatedValue), 0).toFixed(2)),
+    };
+  });
+  const overdueFollowupsCount = overdueFollowupsRow?.count ?? 0;
 
   const totalInvoiced = Number(invoiceStats[0]?.invoiced ?? 0);
   const totalCollected = Number(invoiceStats[0]?.collected ?? 0);
@@ -382,6 +452,7 @@ export async function getDashboardSummary(auth: AuthContext, query: DashboardSum
       team_members_count: allMemberships.length,
       pending_approvals_count: pendingApprovalsCount,
       overdue_tasks_count: overdueTasksCount,
+      overdue_followups_count: overdueFollowupsCount,
       pending_expenses_count: pendingExpenses.length,
       team_expenses_total: Number(totalExpensesAmt.toFixed(2)),
     },
@@ -431,9 +502,10 @@ export async function getDashboardSummary(auth: AuthContext, query: DashboardSum
         totalPipelineValue: Number(totalPipelineVal.toFixed(2)),
         openDealsCount: openLeads.length,
         wonDealsCount: wonLeads.length,
+        overdueFollowupsCount,
         conversionRatePercent: conversionRate,
         currency,
-        byStage: [],
+        byStage: leadsByStageSummary,
       },
       dueInvoices: {
         clientOverdueCount: totalClientDue > 0 ? 1 : 0,
@@ -479,10 +551,33 @@ export async function getModuleAnalytics(
   query: AnalyticsQuery,
 ) {
   const tenantId = auth.tenantId!;
-  const scopeCtx = await resolveRecordScope(auth, "REPORTS.ANALYTICS.VIEW_ALL", "REPORTS.ANALYTICS.VIEW");
+  const teamPerm =
+    moduleType === "sales" && !auth.permissions.includes("REPORTS.ANALYTICS.VIEW_TEAM")
+      ? "SALES.QUOTATIONS.VIEW_TEAM"
+      : "REPORTS.ANALYTICS.VIEW_TEAM";
+  const scopeCtx = await resolveRecordScope(auth, "REPORTS.ANALYTICS.VIEW_ALL", teamPerm);
   const range = resolveDateRange(query.period, query.from, query.to);
   const branchId = query.branch_id ?? query.branchId;
   const departmentId = query.department_id ?? query.departmentId;
+  const ownerUserId = query.owner_user_id ?? query.ownerUserId;
+
+  if (
+    scopeCtx.scope === "TEAM_DEPARTMENT" &&
+    departmentId &&
+    !scopeCtx.departmentIds.includes(departmentId)
+  ) {
+    throw Errors.forbidden("Cannot view analytics for another department.");
+  }
+  if (
+    scopeCtx.scope === "TEAM_DEPARTMENT" &&
+    ownerUserId &&
+    !scopeCtx.teamUserIds.includes(ownerUserId)
+  ) {
+    throw Errors.forbidden("Cannot view analytics for a user outside your team.");
+  }
+  if (scopeCtx.scope === "OWN_ONLY" && ownerUserId && ownerUserId !== auth.userId) {
+    throw Errors.forbidden("You can only view your own analytics.");
+  }
 
   const [deptRows, branchRows] = await Promise.all([
     db
@@ -501,31 +596,310 @@ export async function getModuleAnalytics(
     to: range.end.toISOString(),
     branchId: branchId ?? null,
     departmentId: departmentId ?? null,
+    ownerUserId: ownerUserId ?? null,
   };
 
   if (moduleType === "sales") {
+    const leadConds = [
+      eq(crmLeads.tenantId, tenantId),
+      gte(crmLeads.createdAt, range.start),
+      lte(crmLeads.createdAt, range.end),
+    ];
+    const quoteConds = [
+      eq(salesQuotations.tenantId, tenantId),
+      gte(salesQuotations.createdAt, range.start),
+      lte(salesQuotations.createdAt, range.end),
+    ];
+    const orderConds = [
+      eq(salesOrders.tenantId, tenantId),
+      gte(salesOrders.createdAt, range.start),
+      lte(salesOrders.createdAt, range.end),
+    ];
+
+    if (ownerUserId) {
+      leadConds.push(eq(crmLeads.ownerUserId, ownerUserId));
+      quoteConds.push(eq(salesQuotations.ownerUserId, ownerUserId));
+      orderConds.push(eq(salesOrders.ownerUserId, ownerUserId));
+    } else if (scopeCtx.scope === "TEAM_DEPARTMENT") {
+      leadConds.push(
+        or(
+          inArray(crmLeads.ownerUserId, scopeCtx.teamUserIds),
+          inArray(crmLeads.createdBy, scopeCtx.teamUserIds),
+        )!,
+      );
+      quoteConds.push(
+        or(
+          inArray(salesQuotations.ownerUserId, scopeCtx.teamUserIds),
+          inArray(salesQuotations.createdBy, scopeCtx.teamUserIds),
+        )!,
+      );
+      orderConds.push(
+        or(
+          inArray(salesOrders.ownerUserId, scopeCtx.teamUserIds),
+          inArray(salesOrders.createdBy, scopeCtx.teamUserIds),
+        )!,
+      );
+    } else if (scopeCtx.scope === "OWN_ONLY") {
+      leadConds.push(or(eq(crmLeads.ownerUserId, auth.userId), eq(crmLeads.createdBy, auth.userId))!);
+      quoteConds.push(
+        or(eq(salesQuotations.ownerUserId, auth.userId), eq(salesQuotations.createdBy, auth.userId))!,
+      );
+      orderConds.push(
+        or(eq(salesOrders.ownerUserId, auth.userId), eq(salesOrders.createdBy, auth.userId))!,
+      );
+    }
+
+    const [leads, quotes, orders, membersList] = await Promise.all([
+      db
+        .select({
+          stage: crmLeads.stage,
+          source: crmLeads.source,
+          estimatedValue: crmLeads.estimatedValue,
+          ownerUserId: crmLeads.ownerUserId,
+        })
+        .from(crmLeads)
+        .where(and(...leadConds)),
+      db
+        .select({
+          id: salesQuotations.id,
+          status: salesQuotations.status,
+          grandTotal: salesQuotations.grandTotal,
+          ownerUserId: salesQuotations.ownerUserId,
+        })
+        .from(salesQuotations)
+        .where(and(...quoteConds)),
+      db
+        .select({
+          id: salesOrders.id,
+          customerId: salesOrders.customerId,
+          customerName: crmCustomers.name,
+          status: salesOrders.status,
+          grandTotal: salesOrders.grandTotal,
+          ownerUserId: salesOrders.ownerUserId,
+        })
+        .from(salesOrders)
+        .leftJoin(crmCustomers, eq(crmCustomers.id, salesOrders.customerId))
+        .where(and(...orderConds)),
+      db
+        .select({
+          userId: tenantMemberships.userId,
+          departmentId: tenantMemberships.departmentId,
+          fullName: users.fullName,
+        })
+        .from(tenantMemberships)
+        .innerJoin(users, eq(users.id, tenantMemberships.userId))
+        .where(eq(tenantMemberships.tenantId, tenantId)),
+    ]);
+
+    const userNameMap = new Map(membersList.map((m) => [m.userId, m.fullName]));
+    const userDeptMap = new Map(membersList.map((m) => [m.userId, m.departmentId]));
+
+    const scopedOrderIds = orders.map((o) => o.id);
+    const orderItemsRows =
+      scopedOrderIds.length > 0
+        ? await db
+            .select({
+              productId: salesOrderItems.productId,
+              description: salesOrderItems.description,
+              productName: salesProducts.name,
+              quantity: salesOrderItems.quantity,
+              lineTotal: salesOrderItems.lineTotal,
+            })
+            .from(salesOrderItems)
+            .leftJoin(salesProducts, eq(salesProducts.id, salesOrderItems.productId))
+            .where(inArray(salesOrderItems.orderId, scopedOrderIds))
+        : [];
+
+    const wonLeads = leads.filter((l) => l.stage === "WON");
+    const openLeads = leads.filter((l) => l.stage !== "WON" && l.stage !== "LOST");
+    const conversionRatePercent =
+      leads.length > 0 ? Number(((wonLeads.length / leads.length) * 100).toFixed(1)) : 0;
+    const totalPipelineValue = Number(
+      openLeads.reduce((s, l) => s + Number(l.estimatedValue), 0).toFixed(2),
+    );
+    const wonRevenueFromLeads = wonLeads.reduce((s, l) => s + Number(l.estimatedValue), 0);
+    const totalOrdersRevenue = Number(
+      orders
+        .filter((o) => o.status !== "CANCELLED")
+        .reduce((s, o) => s + Number(o.grandTotal), 0)
+        .toFixed(2),
+    );
+    const averageDealSize =
+      wonLeads.length > 0
+        ? Number((wonRevenueFromLeads / wonLeads.length).toFixed(2))
+        : orders.length > 0
+          ? Number((totalOrdersRevenue / orders.length).toFixed(2))
+          : 0;
+
+    const acceptedQuotes = quotes.filter((q) =>
+      ["APPROVED", "SENT", "ACCEPTED", "CONVERTED"].includes(q.status),
+    );
+    const quotationAcceptanceRatePercent =
+      quotes.length > 0 ? Number(((acceptedQuotes.length / quotes.length) * 100).toFixed(1)) : 0;
+    const totalQuotationValue = Number(
+      quotes.reduce((s, q) => s + Number(q.grandTotal), 0).toFixed(2),
+    );
+
+    const leadsByStage = LEAD_STAGES.map((stage) => {
+      const stageLeads = leads.filter((l) => l.stage === stage);
+      return {
+        stage,
+        count: stageLeads.length,
+        value: Number(stageLeads.reduce((s, l) => s + Number(l.estimatedValue), 0).toFixed(2)),
+      };
+    });
+
+    const sourceMap = new Map<string, { source: string; count: number; value: number }>();
+    for (const l of leads) {
+      const src = l.source?.trim() || "UNSPECIFIED";
+      const cur = sourceMap.get(src) ?? { source: src, count: 0, value: 0 };
+      cur.count += 1;
+      cur.value = Number((cur.value + Number(l.estimatedValue)).toFixed(2));
+      sourceMap.set(src, cur);
+    }
+
+    const ownerLeadMap = new Map<
+      string,
+      { ownerUserId: string; ownerName: string; leadsCount: number; wonCount: number; pipelineValue: number }
+    >();
+    for (const l of leads) {
+      const oid = l.ownerUserId ?? "UNASSIGNED";
+      const cur = ownerLeadMap.get(oid) ?? {
+        ownerUserId: oid,
+        ownerName: oid === "UNASSIGNED" ? "Unassigned" : (userNameMap.get(oid) ?? "Unknown"),
+        leadsCount: 0,
+        wonCount: 0,
+        pipelineValue: 0,
+      };
+      cur.leadsCount += 1;
+      if (l.stage === "WON") cur.wonCount += 1;
+      if (l.stage !== "WON" && l.stage !== "LOST") {
+        cur.pipelineValue = Number((cur.pipelineValue + Number(l.estimatedValue)).toFixed(2));
+      }
+      ownerLeadMap.set(oid, cur);
+    }
+
+    const ownerSalesMap = new Map<
+      string,
+      {
+        ownerUserId: string;
+        ownerName: string;
+        quotationsCount: number;
+        acceptedQuotationsCount: number;
+        ordersCount: number;
+        revenue: number;
+      }
+    >();
+    const ensureOwnerSales = (oid: string) => {
+      let cur = ownerSalesMap.get(oid);
+      if (!cur) {
+        cur = {
+          ownerUserId: oid,
+          ownerName: oid === "UNASSIGNED" ? "Unassigned" : (userNameMap.get(oid) ?? "Unknown"),
+          quotationsCount: 0,
+          acceptedQuotationsCount: 0,
+          ordersCount: 0,
+          revenue: 0,
+        };
+        ownerSalesMap.set(oid, cur);
+      }
+      return cur;
+    };
+    for (const q of quotes) {
+      const cur = ensureOwnerSales(q.ownerUserId ?? "UNASSIGNED");
+      cur.quotationsCount += 1;
+      if (["APPROVED", "SENT", "ACCEPTED", "CONVERTED"].includes(q.status)) {
+        cur.acceptedQuotationsCount += 1;
+      }
+    }
+    for (const o of orders) {
+      const cur = ensureOwnerSales(o.ownerUserId ?? "UNASSIGNED");
+      cur.ordersCount += 1;
+      if (o.status !== "CANCELLED") {
+        cur.revenue = Number((cur.revenue + Number(o.grandTotal)).toFixed(2));
+      }
+    }
+
+    const productSalesMap = new Map<
+      string,
+      { productId: string | null; productName: string; quantitySold: number; revenue: number }
+    >();
+    for (const item of orderItemsRows) {
+      const key = item.productId ?? item.description;
+      const cur = productSalesMap.get(key) ?? {
+        productId: item.productId,
+        productName: item.productName ?? item.description,
+        quantitySold: 0,
+        revenue: 0,
+      };
+      cur.quantitySold = Number((cur.quantitySold + Number(item.quantity)).toFixed(2));
+      cur.revenue = Number((cur.revenue + Number(item.lineTotal)).toFixed(2));
+      productSalesMap.set(key, cur);
+    }
+
+    const customerSalesMap = new Map<
+      string,
+      { customerId: string; customerName: string; ordersCount: number; revenue: number }
+    >();
+    for (const o of orders) {
+      if (o.status === "CANCELLED") continue;
+      const cur = customerSalesMap.get(o.customerId) ?? {
+        customerId: o.customerId,
+        customerName: o.customerName ?? "Customer",
+        ordersCount: 0,
+        revenue: 0,
+      };
+      cur.ordersCount += 1;
+      cur.revenue = Number((cur.revenue + Number(o.grandTotal)).toFixed(2));
+      customerSalesMap.set(o.customerId, cur);
+    }
+
+    const scopedDepts =
+      scopeCtx.scope === "TEAM_DEPARTMENT" && scopeCtx.departmentIds.length > 0
+        ? deptRows.filter((d) => scopeCtx.departmentIds.includes(d.id))
+        : deptRows;
+
     return {
+      scope: scopeCtx.scope,
       module: "SALES",
       appliedFilters,
       metrics: {
-        conversionRatePercent: 0,
-        averageDealSize: 0,
-        totalQuotationsCount: 0,
-        totalOrdersCount: 0,
+        totalLeadsCount: leads.length,
+        wonDealsCount: wonLeads.length,
+        conversionRatePercent,
+        averageDealSize,
+        totalPipelineValue,
+        totalQuotationsCount: quotes.length,
+        acceptedQuotationsCount: acceptedQuotes.length,
+        quotationAcceptanceRatePercent,
+        totalQuotationValue,
+        totalOrdersCount: orders.length,
+        totalRevenue: totalOrdersRevenue,
       },
       charts: {
-        departmentWiseSales: deptRows.map((d) => ({
-          departmentId: d.id,
-          departmentName: d.name,
-          revenue: 0,
-          dealsWon: 0,
-        })),
-        pipelineFunnel: [
-          { stage: "NEW", count: 0, value: 0 },
-          { stage: "QUALIFIED", count: 0, value: 0 },
-          { stage: "QUOTATION_SENT", count: 0, value: 0 },
-          { stage: "WON", count: 0, value: 0 },
-        ],
+        leadsByStage,
+        leadsBySource: Array.from(sourceMap.values()),
+        leadsByOwner: Array.from(ownerLeadMap.values()),
+        ownerWiseSales: Array.from(ownerSalesMap.values()),
+        productWiseSales: Array.from(productSalesMap.values())
+          .sort((a, b) => b.revenue - a.revenue)
+          .slice(0, 15),
+        customerWiseSales: Array.from(customerSalesMap.values())
+          .sort((a, b) => b.revenue - a.revenue)
+          .slice(0, 15),
+        departmentWiseSales: scopedDepts.map((d) => {
+          const deptOrders = orders.filter(
+            (o) => o.ownerUserId && userDeptMap.get(o.ownerUserId) === d.id && o.status !== "CANCELLED",
+          );
+          const deptWon = wonLeads.filter((l) => l.ownerUserId && userDeptMap.get(l.ownerUserId) === d.id);
+          return {
+            departmentId: d.id,
+            departmentName: d.name,
+            revenue: Number(deptOrders.reduce((s, o) => s + Number(o.grandTotal), 0).toFixed(2)),
+            dealsWon: deptWon.length,
+          };
+        }),
+        pipelineFunnel: leadsByStage,
       },
     };
   }

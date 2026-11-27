@@ -30,6 +30,8 @@ export const analyticsQuerySchema = z.object({
   branchId: z.string().uuid().optional(),
   department_id: z.string().uuid().optional(),
   departmentId: z.string().uuid().optional(),
+  owner_user_id: z.string().uuid().optional(),
+  ownerUserId: z.string().uuid().optional(),
 });
 
 export const exportReportSchema = z.object({

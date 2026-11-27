@@ -254,7 +254,7 @@ router.get(
   "/teams",
   jwtAuthGuard,
   entitlementGuard("ORG"),
-  permissionsGuard("ORG.TEAMS.VIEW"),
+  permissionsGuard("ORG.TEAMS.VIEW", "ORG.TEAMS.MANAGE"),
   listTeamsHandler,
 );
 
@@ -289,7 +289,13 @@ router.get(
   "/analytics/sales",
   jwtAuthGuard,
   entitlementGuard("SALES"),
-  permissionsGuard("REPORTS.ANALYTICS.VIEW", "SALES.QUOTATIONS.VIEW"),
+  permissionsGuard(
+    "REPORTS.ANALYTICS.VIEW",
+    "REPORTS.ANALYTICS.VIEW_ALL",
+    "REPORTS.ANALYTICS.VIEW_TEAM",
+    "SALES.QUOTATIONS.VIEW",
+    "SALES.QUOTATIONS.VIEW_TEAM",
+  ),
   createModuleAnalyticsHandler("sales"),
 );
 

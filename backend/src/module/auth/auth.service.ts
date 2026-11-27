@@ -207,9 +207,32 @@ export async function loginUser(input: LoginInput, requestId?: string): Promise<
     tenant = toTenantInfo(tenantRow);
   }
 
-  return db.transaction((tx) =>
-    issueSessionAndTokens(tx, toLoginUser(user), tenant, "AUTH.LOGIN", requestId),
-  );
+  return db.transaction(async (tx) => {
+    if (user.tenantId) {
+      const [existingMembership] = await tx
+        .select({ id: tenantMemberships.id })
+        .from(tenantMemberships)
+        .where(
+          and(
+            eq(tenantMemberships.tenantId, user.tenantId),
+            eq(tenantMemberships.userId, user.id),
+          ),
+        )
+        .limit(1);
+
+      if (!existingMembership) {
+        await tx.insert(tenantMemberships).values({
+          tenantId: user.tenantId,
+          userId: user.id,
+          roleName: user.roles.includes("OWNER") ? "OWNER" : (user.roles[0] ?? "MEMBER"),
+          status: user.isActive ? "ACTIVE" : "INACTIVE",
+          joinedAt: user.createdAt,
+        });
+      }
+    }
+
+    return issueSessionAndTokens(tx, toLoginUser(user), tenant, "AUTH.LOGIN", requestId);
+  });
 }
 
 // Session Logout

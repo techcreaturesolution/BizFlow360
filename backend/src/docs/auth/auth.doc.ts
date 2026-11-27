@@ -263,7 +263,7 @@ export const authDoc = {
         tags: ["[Shared] Auth"],
         summary: "Current authenticated profile with membership & permissions",
         description: "Returns the authenticated user, active tenant membership, and effective RBAC permissions.",
-        security: [{ BearerAuth: [] }],
+        security: [{ bearerAuth: [] }],
         responses: {
           "200": {
             description: "Authenticated user profile",

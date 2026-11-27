@@ -13,7 +13,7 @@ export const businessOwnerDoc = {
         summary: "List company team members",
         description:
           "Returns all staff and team members belonging to the verified tenant with filtering by status, branch, department, search, and pagination. (Requires 3-layer security: JwtAuthGuard -> EntitlementGuard -> PermissionsGuard)",
-        security: [{ BearerAuth: [] }],
+        security: [{ bearerAuth: [] }],
         parameters: [
           { name: "status", in: "query", schema: { type: "string", enum: ["ACTIVE", "INACTIVE", "INVITED", "SUSPENDED"] } },
           { name: "branch", in: "query", schema: { type: "string" } },
@@ -42,7 +42,7 @@ export const businessOwnerDoc = {
         summary: "Invite a new team member",
         description:
           "Sends an invitation with a unique invitation token. Checks company seat quota and records an audit log. Protected by Idempotency-Key header.",
-        security: [{ BearerAuth: [] }],
+        security: [{ bearerAuth: [] }],
         parameters: [
           {
             name: "Idempotency-Key",
@@ -80,7 +80,7 @@ export const businessOwnerDoc = {
         summary: "Activate or deactivate a team member",
         description:
           "Updates user status to ACTIVE or INACTIVE. Owner accounts cannot be deactivated. Writes an audit log.",
-        security: [{ BearerAuth: [] }],
+        security: [{ bearerAuth: [] }],
         parameters: [
           {
             name: "id",
@@ -135,7 +135,7 @@ export const businessOwnerDoc = {
         tags: ["[Business Owner] Team & RBAC"],
         summary: "List company roles and available system permissions",
         description: "Returns predefined system roles (OWNER, ADMIN, MEMBER) plus any custom roles created for this tenant.",
-        security: [{ BearerAuth: [] }],
+        security: [{ bearerAuth: [] }],
         responses: {
           "200": {
             description: "List of roles and permission catalog",
@@ -151,7 +151,7 @@ export const businessOwnerDoc = {
         tags: ["[Business Owner] Team & RBAC"],
         summary: "Create a custom role",
         description: "Creates a new custom role for this tenant. Permissions can be assigned in a follow-up call.",
-        security: [{ BearerAuth: [] }],
+        security: [{ bearerAuth: [] }],
         requestBody: {
           required: true,
           content: {
@@ -206,7 +206,7 @@ export const businessOwnerDoc = {
         summary: "Assign permissions to a custom role",
         description:
           "Replaces assigned permissions for the custom role with the provided permission codes or IDs (e.g. 'MODULE.RESOURCE.ACTION'). System roles cannot be modified.",
-        security: [{ BearerAuth: [] }],
+        security: [{ bearerAuth: [] }],
         parameters: [
           {
             name: "id",

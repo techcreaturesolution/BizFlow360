@@ -39,6 +39,22 @@ export const STANDARD_PERMISSIONS = [
   { code: "INVENTORY.ITEMS.MANAGE", moduleCode: "INVENTORY", description: "Adjust stock, warehouses and transfers" },
 ] as const;
 
+export async function ensureStandardPermissions(
+  executor: Pick<Db, "insert" | "select">,
+): Promise<void> {
+  for (const perm of STANDARD_PERMISSIONS) {
+    const existing = await executor
+      .select({ id: permissions.id })
+      .from(permissions)
+      .where(eq(permissions.code, perm.code))
+      .limit(1);
+
+    if (existing.length === 0) {
+      await executor.insert(permissions).values(perm);
+    }
+  }
+}
+
 export async function initializeTenantDefaults(
   executor: Pick<Db, "insert" | "select">,
   tenantId: string,
@@ -63,17 +79,7 @@ export async function initializeTenantDefaults(
   );
 
   // 3. Ensure standard permissions exist in global catalog
-  for (const perm of STANDARD_PERMISSIONS) {
-    const existing = await executor
-      .select({ id: permissions.id })
-      .from(permissions)
-      .where(eq(permissions.code, perm.code))
-      .limit(1);
-
-    if (existing.length === 0) {
-      await executor.insert(permissions).values(perm);
-    }
-  }
+  await ensureStandardPermissions(executor);
 
   // 4. Create standard default roles for this tenant
   const [adminRole] = await executor

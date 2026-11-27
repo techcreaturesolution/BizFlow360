@@ -13,6 +13,7 @@ import {
   users,
 } from "../../db/schema";
 import { writeAudit } from "../../lib/audit";
+import { ensureStandardPermissions } from "../../db/tenantDefaults";
 import { Errors } from "../../lib/errors";
 import { hashToken } from "../../lib/jwt";
 import type {
@@ -333,7 +334,7 @@ export async function getRoles(tenantId: string) {
     }
   }
 
-  const allAvailablePermissions = await db
+  let allAvailablePermissions = await db
     .select({
       id: permissions.id,
       code: permissions.code,
@@ -342,6 +343,19 @@ export async function getRoles(tenantId: string) {
     })
     .from(permissions)
     .orderBy(permissions.moduleCode, permissions.code);
+
+  if (allAvailablePermissions.length === 0) {
+    await ensureStandardPermissions(db);
+    allAvailablePermissions = await db
+      .select({
+        id: permissions.id,
+        code: permissions.code,
+        moduleCode: permissions.moduleCode,
+        description: permissions.description,
+      })
+      .from(permissions)
+      .orderBy(permissions.moduleCode, permissions.code);
+  }
 
   return {
     roles: roleRows.map((r) => ({
@@ -428,20 +442,24 @@ export async function assignRolePermissions(
     throw Errors.forbidden("System predefined roles (OWNER, ADMIN, MEMBER) cannot be modified. Create a custom role instead.");
   }
 
+  await ensureStandardPermissions(db);
+
   // Resolve permission IDs (supports both UUID IDs and codes like 'CRM.LEADS.CREATE')
   const isUuid = (val: string) => /^[0-9a-fA-F-]{36}$/.test(val);
   const uuidList = input.permissionIds.filter(isUuid);
   const codeList = input.permissionIds.filter((p) => !isUuid(p));
 
-  const resolvedPerms = await db
-    .select({ id: permissions.id, code: permissions.code })
-    .from(permissions)
-    .where(
-      or(
-        uuidList.length > 0 ? inArray(permissions.id, uuidList) : undefined,
-        codeList.length > 0 ? inArray(permissions.code, codeList) : undefined,
-      ),
-    );
+  const permFilters = [];
+  if (uuidList.length > 0) permFilters.push(inArray(permissions.id, uuidList));
+  if (codeList.length > 0) permFilters.push(inArray(permissions.code, codeList));
+
+  const resolvedPerms =
+    permFilters.length > 0
+      ? await db
+          .select({ id: permissions.id, code: permissions.code })
+          .from(permissions)
+          .where(permFilters.length === 1 ? permFilters[0] : or(...permFilters))
+      : [];
 
   if (resolvedPerms.length === 0) {
     throw Errors.badRequest("None of the specified permissions were found in the system catalog.");

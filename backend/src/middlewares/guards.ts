@@ -161,6 +161,18 @@ export function entitlementGuard(moduleCode: ModuleCode | string) {
       )
       .limit(1);
 
+    // AUTH is a core workspace module required for team/RBAC on all plans unless explicitly disabled
+    if (moduleCode === "AUTH") {
+      if (entitlement && !entitlement.isEnabled) {
+        return next(
+          Errors.forbidden(
+            "Team & RBAC access has been disabled for your workspace.",
+          ),
+        );
+      }
+      return next();
+    }
+
     if (!entitlement || !entitlement.isEnabled) {
       return next(
         Errors.forbidden(

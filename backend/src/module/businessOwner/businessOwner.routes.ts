@@ -1,4 +1,4 @@
-// Business Owner routes: Team, Invitations, User Status, Roles & RBAC Permissions.
+// Business Owner routes: Team, Invitations, User Status, Roles & RBAC + Organization & Company Setup.
 // Enforces 3-layer security check: JwtAuthGuard -> EntitlementGuard -> PermissionsGuard + IdempotencyGuard
 import { Router } from "express";
 import {
@@ -15,10 +15,25 @@ import {
   inviteMemberHandler,
   updateUserStatusHandler,
 } from "./businessOwner.controller";
+import {
+  createBranchHandler,
+  createDepartmentHandler,
+  createTeamHandler,
+  getCompanyProfileHandler,
+  listBranchesHandler,
+  listDepartmentsHandler,
+  listTeamsHandler,
+  updateBranchHandler,
+  updateCompanyProfileHandler,
+  updateDepartmentHandler,
+  updateTeamHandler,
+} from "./companySetup.controller";
 
 const router = Router();
 
-// 1. Team Members List: GET /users
+// ==========================================
+// A. Auth, Team Invites & RBAC
+// ==========================================
 router.get(
   "/users",
   jwtAuthGuard,
@@ -27,7 +42,6 @@ router.get(
   getTeamMembersHandler,
 );
 
-// 2. Invite Member: POST /users/invitations
 router.post(
   "/users/invitations",
   jwtAuthGuard,
@@ -37,7 +51,6 @@ router.post(
   inviteMemberHandler,
 );
 
-// 3. Activate / Deactivate User: PATCH /users/:id/status
 router.patch(
   "/users/:id/status",
   jwtAuthGuard,
@@ -46,7 +59,6 @@ router.patch(
   updateUserStatusHandler,
 );
 
-// 4. Roles List: GET /roles
 router.get(
   "/roles",
   jwtAuthGuard,
@@ -55,7 +67,6 @@ router.get(
   getRolesHandler,
 );
 
-// 5. Create Custom Role: POST /roles
 router.post(
   "/roles",
   jwtAuthGuard,
@@ -64,13 +75,119 @@ router.post(
   createRoleHandler,
 );
 
-// 6. Assign Role Permissions: PUT /roles/:id/permissions
 router.put(
   "/roles/:id/permissions",
   jwtAuthGuard,
   entitlementGuard("AUTH"),
   permissionsGuard("AUTH.ROLES.MANAGE"),
   assignRolePermissionsHandler,
+);
+
+// ==========================================
+// B. Organization & Company Setup Wizard
+// ==========================================
+router.get(
+  "/company",
+  jwtAuthGuard,
+  entitlementGuard("ORG"),
+  permissionsGuard("ORG.COMPANY.VIEW"),
+  getCompanyProfileHandler,
+);
+
+router.put(
+  "/company",
+  jwtAuthGuard,
+  entitlementGuard("ORG"),
+  permissionsGuard("ORG.COMPANY.MANAGE"),
+  updateCompanyProfileHandler,
+);
+
+router.get(
+  "/branches",
+  jwtAuthGuard,
+  entitlementGuard("ORG"),
+  permissionsGuard("ORG.BRANCHES.VIEW"),
+  listBranchesHandler,
+);
+
+router.post(
+  "/branches",
+  jwtAuthGuard,
+  entitlementGuard("ORG"),
+  permissionsGuard("ORG.BRANCHES.MANAGE"),
+  createBranchHandler,
+);
+
+router.put(
+  "/branches",
+  jwtAuthGuard,
+  entitlementGuard("ORG"),
+  permissionsGuard("ORG.BRANCHES.MANAGE"),
+  updateBranchHandler,
+);
+
+router.put(
+  "/branches/:id",
+  jwtAuthGuard,
+  entitlementGuard("ORG"),
+  permissionsGuard("ORG.BRANCHES.MANAGE"),
+  updateBranchHandler,
+);
+
+router.get(
+  "/departments",
+  jwtAuthGuard,
+  entitlementGuard("ORG"),
+  permissionsGuard("ORG.DEPARTMENTS.VIEW"),
+  listDepartmentsHandler,
+);
+
+router.post(
+  "/departments",
+  jwtAuthGuard,
+  entitlementGuard("ORG"),
+  permissionsGuard("ORG.DEPARTMENTS.MANAGE"),
+  createDepartmentHandler,
+);
+
+router.put(
+  "/departments",
+  jwtAuthGuard,
+  entitlementGuard("ORG"),
+  permissionsGuard("ORG.DEPARTMENTS.MANAGE"),
+  updateDepartmentHandler,
+);
+
+router.put(
+  "/departments/:id",
+  jwtAuthGuard,
+  entitlementGuard("ORG"),
+  permissionsGuard("ORG.DEPARTMENTS.MANAGE"),
+  updateDepartmentHandler,
+);
+
+router.get(
+  "/teams",
+  jwtAuthGuard,
+  entitlementGuard("ORG"),
+  permissionsGuard("ORG.TEAMS.VIEW"),
+  listTeamsHandler,
+);
+
+router.post(
+  "/teams",
+  jwtAuthGuard,
+  entitlementGuard("ORG"),
+  permissionsGuard("ORG.TEAMS.MANAGE"),
+  createTeamHandler,
+);
+
+router.put(
+  "/teams/:id",
+  jwtAuthGuard,
+  entitlementGuard("ORG"),
+  permissionsGuard("ORG.TEAMS.MANAGE"),
+  updateTeamHandler,
 );
 
 export default router;

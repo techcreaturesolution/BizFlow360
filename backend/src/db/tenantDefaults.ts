@@ -18,6 +18,16 @@ export const STANDARD_PERMISSIONS = [
   { code: "AUTH.USERS.MANAGE", moduleCode: "AUTH", description: "Activate, deactivate or edit team members" },
   { code: "AUTH.ROLES.MANAGE", moduleCode: "AUTH", description: "Create and edit custom roles and permissions" },
 
+  // Organization & Company Setup
+  { code: "ORG.COMPANY.VIEW", moduleCode: "ORG", description: "View company profile and preferences" },
+  { code: "ORG.COMPANY.MANAGE", moduleCode: "ORG", description: "Update company profile, tax ID, currency and preferences" },
+  { code: "ORG.BRANCHES.VIEW", moduleCode: "ORG", description: "View company branches" },
+  { code: "ORG.BRANCHES.MANAGE", moduleCode: "ORG", description: "Create and update company branches" },
+  { code: "ORG.DEPARTMENTS.VIEW", moduleCode: "ORG", description: "View company departments" },
+  { code: "ORG.DEPARTMENTS.MANAGE", moduleCode: "ORG", description: "Create and update company departments" },
+  { code: "ORG.TEAMS.VIEW", moduleCode: "ORG", description: "View teams and team member hierarchy" },
+  { code: "ORG.TEAMS.MANAGE", moduleCode: "ORG", description: "Create teams and assign team managers/members" },
+
   // CRM
   { code: "CRM.LEADS.VIEW", moduleCode: "CRM", description: "View CRM leads and customer records" },
   { code: "CRM.LEADS.MANAGE", moduleCode: "CRM", description: "Create, edit and manage CRM leads" },

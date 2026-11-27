@@ -60,6 +60,7 @@ export const updateCompanySchema = z.object({
     .refine(isValidTimezone, { message: "Valid IANA timezone dalein (jaise Asia/Kolkata)" })
     .optional(),
   financialYear: z.string().trim().min(3).max(50).optional(),
+  financialYearStart: z.string().trim().min(1).max(50).optional(),
   dateFormat: z.string().trim().min(4).max(30).optional(),
   numberingPreferences: numberingPreferencesSchema,
   numberingRules: numberingPreferencesSchema,

@@ -225,6 +225,21 @@ export function permissionsGuard(...requiredPermissions: string[]) {
   };
 }
 
+// Record Scope Helper:
+// OWNER, ADMIN, SUPER_ADMIN, or roles with module-level VIEW_ALL get tenant-wide access.
+// Regular executives (e.g. Sales Executive) only see records where ownerUserId/assigneeUserId == userId.
+export function hasTenantWideScope(auth: AuthContext, allPermission?: string): boolean {
+  if (
+    auth.permissions.includes("*") ||
+    auth.roles.includes("OWNER") ||
+    auth.roles.includes("ADMIN") ||
+    auth.roles.includes("SUPER_ADMIN")
+  ) {
+    return true;
+  }
+  return allPermission ? auth.permissions.includes(allPermission) : false;
+}
+
 // IdempotencyGuard for retry-sensitive APIs (payments, order conversions, invitations)
 const idempotencyStore = new Map<string, { body: unknown; status: number; timestamp: number }>();
 const IDEMPOTENCY_TTL_MS = 60 * 1000; // 1 minute TTL

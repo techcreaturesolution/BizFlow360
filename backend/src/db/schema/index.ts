@@ -17,3 +17,8 @@ export * from "./passwordResets";
 export * from "./organization";
 export * from "./dashboardReports";
 export * from "./approvalsNotifications";
+export * from "./crm";
+export * from "./sales";
+export * from "./finance";
+export * from "./tasks";
+export * from "./documents";

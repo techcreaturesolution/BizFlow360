@@ -4,6 +4,9 @@ import { authDoc } from "./auth/auth.doc";
 import { approvalsNotificationsDoc } from "./businessOwner/approvalsNotifications.doc";
 import { businessOwnerDoc } from "./businessOwner/businessOwner.doc";
 import { companySetupDoc } from "./businessOwner/companySetup.doc";
+import { coreCrmDoc } from "./businessOwner/coreCrm.doc";
+import { coreOperationsDoc } from "./businessOwner/coreOperations.doc";
+import { coreSalesDoc } from "./businessOwner/coreSales.doc";
 import { dashboardReportsDoc } from "./businessOwner/dashboardReports.doc";
 import { tenantBillingDoc } from "./businessOwner/tenantBilling.doc";
 import { commonDoc } from "./common/common.doc";
@@ -70,6 +73,9 @@ const businessOwnerModules: DocModule[] = [
   dashboardReportsDoc,
   tenantBillingDoc,
   approvalsNotificationsDoc,
+  coreCrmDoc,
+  coreSalesDoc,
+  coreOperationsDoc,
 ];
 
 export const sharedSwaggerDocument = buildOpenApiSpec(

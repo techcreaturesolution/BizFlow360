@@ -44,16 +44,39 @@ export const STANDARD_PERMISSIONS = [
   { code: "NOTIFICATIONS.ALERTS.VIEW", moduleCode: "NOTIFICATIONS", description: "View in-app notifications and manage alert preferences" },
 
   // CRM
-  { code: "CRM.LEADS.VIEW", moduleCode: "CRM", description: "View CRM leads and customer records" },
-  { code: "CRM.LEADS.MANAGE", moduleCode: "CRM", description: "Create, edit and manage CRM leads" },
+  { code: "CRM.LEADS.VIEW", moduleCode: "CRM", description: "View assigned CRM leads" },
+  { code: "CRM.LEADS.VIEW_ALL", moduleCode: "CRM", description: "View all company-wide CRM leads" },
+  { code: "CRM.LEADS.MANAGE", moduleCode: "CRM", description: "Create, edit, assign and convert CRM leads" },
+  { code: "CRM.CUSTOMERS.VIEW", moduleCode: "CRM", description: "View customer records" },
+  { code: "CRM.CUSTOMERS.MANAGE", moduleCode: "CRM", description: "Create and update customer records" },
 
   // Sales
-  { code: "SALES.QUOTATIONS.VIEW", moduleCode: "SALES", description: "View sales quotations and orders" },
-  { code: "SALES.QUOTATIONS.MANAGE", moduleCode: "SALES", description: "Create and approve sales quotations" },
+  { code: "SALES.PRODUCTS.VIEW", moduleCode: "SALES", description: "View products and services catalogue" },
+  { code: "SALES.PRODUCTS.MANAGE", moduleCode: "SALES", description: "Create and update products/services" },
+  { code: "SALES.QUOTATIONS.VIEW", moduleCode: "SALES", description: "View assigned sales quotations" },
+  { code: "SALES.QUOTATIONS.VIEW_ALL", moduleCode: "SALES", description: "View all company-wide quotations" },
+  { code: "SALES.QUOTATIONS.MANAGE", moduleCode: "SALES", description: "Create, send and convert quotations to orders" },
+  { code: "SALES.QUOTATIONS.APPROVE", moduleCode: "SALES", description: "Approve sales quotations" },
+  { code: "SALES.ORDERS.VIEW", moduleCode: "SALES", description: "View sales orders" },
+  { code: "SALES.ORDERS.MANAGE", moduleCode: "SALES", description: "Create and manage sales orders" },
 
-  // Finance
-  { code: "FINANCE.INVOICES.VIEW", moduleCode: "FINANCE", description: "View invoices and payment receipts" },
-  { code: "FINANCE.INVOICES.MANAGE", moduleCode: "FINANCE", description: "Issue invoices and record payments" },
+  // Finance & Billing
+  { code: "FINANCE.INVOICES.VIEW", moduleCode: "FINANCE", description: "View client invoices and payment receipts" },
+  { code: "FINANCE.INVOICES.MANAGE", moduleCode: "FINANCE", description: "Issue client invoices and record payments" },
+  { code: "FINANCE.EXPENSES.VIEW", moduleCode: "FINANCE", description: "View own submitted expenses" },
+  { code: "FINANCE.EXPENSES.VIEW_ALL", moduleCode: "FINANCE", description: "View all company expenses" },
+  { code: "FINANCE.EXPENSES.MANAGE", moduleCode: "FINANCE", description: "Create and submit expenses" },
+  { code: "FINANCE.EXPENSES.APPROVE", moduleCode: "FINANCE", description: "Approve or reject submitted expenses" },
+  { code: "FINANCE.RECEIVABLES.VIEW", moduleCode: "FINANCE", description: "View accounts receivable summary & aging" },
+
+  // Tasks
+  { code: "TASKS.TASKS.VIEW", moduleCode: "TASKS", description: "View assigned tasks" },
+  { code: "TASKS.TASKS.VIEW_ALL", moduleCode: "TASKS", description: "View all company tasks" },
+  { code: "TASKS.TASKS.MANAGE", moduleCode: "TASKS", description: "Create, assign, update and comment on tasks" },
+
+  // Documents
+  { code: "DOCUMENTS.FILES.VIEW", moduleCode: "DOCUMENTS", description: "View and download company documents" },
+  { code: "DOCUMENTS.FILES.MANAGE", moduleCode: "DOCUMENTS", description: "Upload, register and delete company documents" },
 
   // HR
   { code: "HR.EMPLOYEES.VIEW", moduleCode: "HR", description: "View employee profiles and attendance" },

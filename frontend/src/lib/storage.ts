@@ -65,9 +65,41 @@ export function getUser(): LoginUser | null {
   if (typeof window === "undefined") return null;
   try {
     const raw = localStorage.getItem(USER_KEY);
-    return raw ? (JSON.parse(raw) as LoginUser) : null;
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as Partial<LoginUser>;
+    // Ensure fullName and roles have sensible defaults if corrupt or partial
+    return {
+      id: parsed.id || "",
+      tenantId: parsed.tenantId !== undefined ? parsed.tenantId : null,
+      fullName: parsed.fullName || (parsed as Record<string, unknown>).full_name as string || "User",
+      email: parsed.email || "",
+      phone: parsed.phone || null,
+      roles: Array.isArray(parsed.roles) && parsed.roles.length > 0 ? parsed.roles : ["MEMBER"],
+    };
   } catch {
     return null;
+  }
+}
+
+export function updateUser(partialUser: Partial<LoginUser>): void {
+  if (typeof window === "undefined") return;
+  try {
+    const existing = getUser() || {
+      id: "",
+      tenantId: null,
+      fullName: "User",
+      email: "",
+      phone: null,
+      roles: ["MEMBER"],
+    };
+    const merged: LoginUser = {
+      ...existing,
+      ...partialUser,
+      roles: partialUser.roles || existing.roles,
+    };
+    localStorage.setItem(USER_KEY, JSON.stringify(merged));
+  } catch (error) {
+    console.error("Failed to update user in localStorage:", error);
   }
 }
 
@@ -78,6 +110,22 @@ export function getTenant(): TenantInfo | null {
     return raw ? (JSON.parse(raw) as TenantInfo) : null;
   } catch {
     return null;
+  }
+}
+
+export function updateTenant(partialTenant: Partial<TenantInfo>): void {
+  if (typeof window === "undefined") return;
+  try {
+    const existing = getTenant();
+    if (!existing) return;
+    const merged: TenantInfo = {
+      ...existing,
+      ...partialTenant,
+    };
+    localStorage.setItem(TENANT_KEY, JSON.stringify(merged));
+    window.dispatchEvent(new Event("tenant_updated"));
+  } catch (error) {
+    console.error("Failed to update tenant in localStorage:", error);
   }
 }
 

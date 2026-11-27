@@ -1,5 +1,6 @@
 import { isAxiosError } from "axios";
 import { api } from "./api";
+import { getUser, updateUser } from "./storage";
 import type {
   AuthSuccessResponse,
   ErrorResponse,
@@ -8,6 +9,82 @@ import type {
   MeSuccessResponse,
   RegisterInput,
 } from "../types/auth";
+
+export function normalizeLoginUser(raw: unknown): LoginUser {
+  const stored = getUser();
+  if (!raw || typeof raw !== "object") {
+    return (
+      stored || {
+        id: "",
+        tenantId: null,
+        fullName: "User",
+        email: "",
+        phone: null,
+        roles: ["MEMBER"],
+      }
+    );
+  }
+
+  const obj = raw as Record<string, unknown>;
+  const source =
+    (obj.user && typeof obj.user === "object" ? (obj.user as Record<string, unknown>) : null) ||
+    (obj.data && typeof obj.data === "object" ? (obj.data as Record<string, unknown>) : null) ||
+    obj;
+
+  const innerSource =
+    source.user && typeof source.user === "object"
+      ? (source.user as Record<string, unknown>)
+      : source;
+
+  const id = String(innerSource.id || innerSource._id || innerSource.userId || stored?.id || "");
+  const tenantId =
+    innerSource.tenantId !== undefined
+      ? (innerSource.tenantId as string | null)
+      : innerSource.tenant_id !== undefined
+      ? (innerSource.tenant_id as string | null)
+      : stored?.tenantId || null;
+
+  const fullName = String(
+    innerSource.fullName ||
+      innerSource.full_name ||
+      innerSource.name ||
+      stored?.fullName ||
+      (innerSource.email ? String(innerSource.email).split("@")[0] : "User")
+  );
+
+  const email = String(innerSource.email || stored?.email || "");
+  const phone =
+    (innerSource.phone as string | null) ||
+    (innerSource.phoneNumber as string | null) ||
+    (innerSource.phone_number as string | null) ||
+    stored?.phone ||
+    null;
+
+  let roles: string[] = [];
+  if (Array.isArray(innerSource.roles) && innerSource.roles.length > 0) {
+    roles = innerSource.roles.map(String);
+  } else if (Array.isArray(innerSource.role)) {
+    roles = innerSource.role.map(String);
+  } else if (typeof innerSource.role === "string" && innerSource.role) {
+    roles = [innerSource.role];
+  } else if (stored?.roles && stored.roles.length > 0) {
+    roles = stored.roles;
+  } else {
+    roles = ["MEMBER"];
+  }
+
+  const normalized: LoginUser = {
+    id,
+    tenantId,
+    fullName,
+    email,
+    phone,
+    roles,
+  };
+
+  updateUser(normalized);
+  return normalized;
+}
 
 export async function registerUser(payload: RegisterInput): Promise<AuthSuccessResponse> {
   const sanitizedPhone =
@@ -42,8 +119,16 @@ export async function loginUser(payload: LoginInput): Promise<AuthSuccessRespons
 }
 
 export async function getMe(): Promise<LoginUser> {
-  const response = await api.get<MeSuccessResponse>("/api/v1/auth/me");
-  return response.data.data;
+  try {
+    const response = await api.get<unknown>("/api/v1/auth/me");
+    return normalizeLoginUser(response.data);
+  } catch (error) {
+    const stored = getUser();
+    if (stored) {
+      return stored;
+    }
+    throw error;
+  }
 }
 
 export interface ParsedError {
@@ -145,14 +230,17 @@ export function parseRegisterError(error: unknown): ParsedError {
 export function parseLoginError(error: unknown): string {
   if (isAxiosError(error)) {
     const status = error.response?.status;
-    const responseData = error.response?.data as ErrorResponse | undefined;
+    const responseData = error.response?.data;
 
     if (status === 401) {
       return "Invalid email or password";
     }
 
     if (status === 403) {
-      return responseData?.message || "Account is disabled";
+      if (typeof responseData === "object" && responseData && "message" in responseData) {
+        return String((responseData as Record<string, unknown>).message);
+      }
+      return "Account is disabled";
     }
 
     if (status === 429) {
@@ -160,14 +248,45 @@ export function parseLoginError(error: unknown): string {
     }
 
     if (status === 400) {
-      if (responseData?.errors && Array.isArray(responseData.errors) && responseData.errors[0]?.message) {
-        return responseData.errors[0].message;
+      if (typeof responseData === "object" && responseData) {
+        const dObj = responseData as Record<string, unknown>;
+        if (Array.isArray(dObj.errors) && dObj.errors[0]?.message) {
+          return String(dObj.errors[0].message);
+        }
+        if (dObj.message || dObj.error) {
+          return String(dObj.message || dObj.error);
+        }
       }
-      return responseData?.message || responseData?.error || "Invalid login credentials";
+      return "Invalid login credentials";
     }
 
-    if (responseData?.message || responseData?.error) {
-      return responseData.message || responseData.error || "Login failed";
+    if (status === 500) {
+      if (typeof responseData === "object" && responseData) {
+        const dObj = responseData as Record<string, unknown>;
+        if (dObj.message && dObj.message !== "Something went wrong") {
+          return String(dObj.message);
+        }
+      }
+      return "The cloud database (Supabase) is currently sleeping, paused, or waking up. If you are on Supabase free tier, please check your Supabase dashboard and restore the project.";
+    }
+
+    if (status === 502 || status === 503 || status === 504) {
+      if (typeof responseData === "object" && responseData) {
+        const dObj = responseData as Record<string, unknown>;
+        if (dObj.message) {
+          return String(dObj.message);
+        }
+      }
+      return "Unable to connect to the cloud backend or database. If using free tiers (Render/Supabase), they may be waking up from sleep. Please wait a moment and try again.";
+    }
+
+    if (typeof responseData === "object" && responseData) {
+      const dObj = responseData as Record<string, unknown>;
+      if (dObj.message || dObj.error) {
+        return String(dObj.message || dObj.error);
+      }
+    } else if (typeof responseData === "string" && responseData.trim() && !responseData.includes("<")) {
+      return responseData.trim();
     }
 
     if (error.code === "ECONNABORTED" || error.message?.includes("Network Error") || !error.response) {

@@ -28,6 +28,7 @@ export function LoginForm() {
   const isSessionExpired = searchParams.get("session") === "expired";
 
   const [serverError, setServerError] = useState<string | null>(null);
+  const [isWakingUp, setIsWakingUp] = useState(false);
   const [successBanner, setSuccessBanner] = useState<string | null>(
     isRegisteredParam ? "Registration successful! Login with your credentials." : null
   );
@@ -77,12 +78,21 @@ export function LoginForm() {
 
   const onSubmit = async (data: LoginFormData) => {
     setServerError(null);
+    setIsWakingUp(false);
+
+    // If server takes longer than 3.5s, it is likely a Render/Supabase cold start
+    const coldStartTimer = setTimeout(() => {
+      setIsWakingUp(true);
+    }, 3500);
 
     try {
       const response = await loginUser({
         email: data.email,
         password: data.password,
       });
+
+      clearTimeout(coldStartTimer);
+      setIsWakingUp(false);
 
       if (response.success && response.data) {
         saveAuth({
@@ -101,6 +111,8 @@ export function LoginForm() {
         }
       }
     } catch (err: unknown) {
+      clearTimeout(coldStartTimer);
+      setIsWakingUp(false);
       const message = parseLoginError(err);
       setServerError(message);
     }
@@ -197,8 +209,19 @@ export function LoginForm() {
           className="w-full text-base font-semibold shadow-lg shadow-indigo-600/25 hover:shadow-indigo-600/35 active:scale-[0.99] transition-transform"
           rightIcon={<ArrowRight className="h-4 w-4" />}
         >
-          {isSubmitting ? "Signing in..." : "Sign In to Workspace"}
+          {isSubmitting ? (isWakingUp ? "Waking Cloud DB..." : "Signing in...") : "Sign In to Workspace"}
         </Button>
+
+        {/* Cold Start Notice */}
+        {isWakingUp && (
+          <div className="flex items-center gap-2.5 rounded-lg border border-amber-200 bg-amber-50/80 px-3 py-2 text-xs text-amber-800 animate-fadeIn">
+            <span className="relative flex h-2 w-2">
+              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-amber-400 opacity-75"></span>
+              <span className="relative inline-flex rounded-full h-2 w-2 bg-amber-500"></span>
+            </span>
+            <span>Connecting to cloud backend. Render / Supabase instances may take 20-40s to wake up from cold sleep...</span>
+          </div>
+        )}
 
         {/* Footer Navigation */}
         <div className="text-center pt-3 border-t border-slate-200">

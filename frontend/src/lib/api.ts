@@ -1,14 +1,20 @@
 import axios from "axios";
 import { clearAuth, getAccessToken } from "./storage";
 
-// In the browser, using a relative path ("") routes API requests through the Next.js
-// proxy rewrite in next.config.mjs. This eliminates cross-origin browser CORS blocks
-// and connection refused errors. On the server side, it falls back to the full Render backend URL.
+// Determine the backend base URL.
+// In the browser, we default to "" (relative URL) so all calls route through the
+// Next.js rewrite proxy configured in next.config.mjs (/api/:path* -> Render).
+// This completely avoids browser cross-origin CORS policy blocks.
 const getBaseURL = () => {
   if (typeof window !== "undefined") {
-    if (process.env.NEXT_PUBLIC_USE_PROXY === "false") {
-      return process.env.NEXT_PUBLIC_API_URL || "https://bizflow360-p3sp.onrender.com";
+    // When direct API is explicitly requested via NEXT_PUBLIC_DIRECT_API === "true", use direct URL
+    if (process.env.NEXT_PUBLIC_DIRECT_API === "true") {
+      return (
+        process.env.NEXT_PUBLIC_API_URL ||
+        "https://bizflow360-p3sp.onrender.com"
+      );
     }
+    // Default in browser: use Next.js rewrite proxy (same-origin, zero CORS issues)
     return "";
   }
   return (
@@ -23,7 +29,7 @@ export const api = axios.create({
   headers: {
     "Content-Type": "application/json",
   },
-  timeout: 60000,
+  timeout: 90000, // 90s to comfortably tolerate Render free-tier cold starts
 });
 
 // Request interceptor: attach Bearer token if available
@@ -57,3 +63,24 @@ api.interceptors.response.use(
     return Promise.reject(error);
   }
 );
+
+/**
+ * Generates or reuses an Idempotency-Key header for state-mutating requests.
+ * Use once per user action; pass the returned key on retries of the exact same action.
+ */
+export function withIdempotency(existingKey?: string): {
+  headers: { "Idempotency-Key": string };
+  key: string;
+} {
+  const key =
+    existingKey ||
+    (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
+      ? crypto.randomUUID()
+      : `idemp_${Date.now()}_${Math.random().toString(36).substring(2, 11)}`);
+  return {
+    headers: {
+      "Idempotency-Key": key,
+    },
+    key,
+  };
+}

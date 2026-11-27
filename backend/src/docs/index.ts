@@ -4,6 +4,7 @@ import { authDoc } from "./auth/auth.doc";
 import { businessOwnerDoc } from "./businessOwner/businessOwner.doc";
 import { companySetupDoc } from "./businessOwner/companySetup.doc";
 import { dashboardReportsDoc } from "./businessOwner/dashboardReports.doc";
+import { tenantBillingDoc } from "./businessOwner/tenantBilling.doc";
 import { commonDoc } from "./common/common.doc";
 import { healthDoc } from "./health/health.doc";
 import { auditDoc } from "./supperadmin/audit.doc";
@@ -62,7 +63,12 @@ function buildOpenApiSpec(title: string, description: string, modules: DocModule
 
 const sharedModules: DocModule[] = [healthDoc, authDoc];
 const superAdminModules: DocModule[] = [superAdminDoc, plansDoc, billingDoc, auditDoc];
-const businessOwnerModules: DocModule[] = [businessOwnerDoc, companySetupDoc, dashboardReportsDoc];
+const businessOwnerModules: DocModule[] = [
+  businessOwnerDoc,
+  companySetupDoc,
+  dashboardReportsDoc,
+  tenantBillingDoc,
+];
 
 export const sharedSwaggerDocument = buildOpenApiSpec(
   "BizFlow360 - Auth & Health APIs",

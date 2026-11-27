@@ -161,8 +161,8 @@ export function entitlementGuard(moduleCode: ModuleCode | string) {
       )
       .limit(1);
 
-    // AUTH, ORG and REPORTS are core workspace modules required for team/company setup & dashboard unless explicitly disabled
-    if (moduleCode === "AUTH" || moduleCode === "ORG" || moduleCode === "REPORTS") {
+    // AUTH, ORG, REPORTS and BILLING are core workspace modules required unless explicitly disabled
+    if (moduleCode === "AUTH" || moduleCode === "ORG" || moduleCode === "REPORTS" || moduleCode === "BILLING") {
       if (entitlement && !entitlement.isEnabled) {
         return next(
           Errors.forbidden(

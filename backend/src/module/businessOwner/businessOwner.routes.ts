@@ -36,6 +36,16 @@ import {
   saveDashboardWidgetsHandler,
   triggerReportExportHandler,
 } from "./dashboardReports.controller";
+import {
+  cancelSubscriptionHandler,
+  changeSubscriptionPlanHandler,
+  downloadTenantInvoiceHandler,
+  getBillingUsageHandler,
+  getCurrentSubscriptionHandler,
+  listAvailablePlansHandler,
+  listTenantInvoicesHandler,
+  startBillingCheckoutHandler,
+} from "./tenantBilling.controller";
 
 const router = Router();
 
@@ -272,6 +282,76 @@ router.put(
   entitlementGuard("REPORTS"),
   permissionsGuard("REPORTS.DASHBOARD.MANAGE"),
   saveDashboardWidgetsHandler,
+);
+
+// ==========================================
+// D. Tenant Subscription & Billing
+// ==========================================
+router.get(
+  "/billing/plans",
+  jwtAuthGuard,
+  entitlementGuard("BILLING"),
+  permissionsGuard("BILLING.SUBSCRIPTION.VIEW"),
+  listAvailablePlansHandler,
+);
+
+router.get(
+  "/billing/subscription",
+  jwtAuthGuard,
+  entitlementGuard("BILLING"),
+  permissionsGuard("BILLING.SUBSCRIPTION.VIEW"),
+  getCurrentSubscriptionHandler,
+);
+
+router.get(
+  "/billing/invoices",
+  jwtAuthGuard,
+  entitlementGuard("BILLING"),
+  permissionsGuard("BILLING.SUBSCRIPTION.VIEW"),
+  listTenantInvoicesHandler,
+);
+
+router.get(
+  "/billing/invoices/:id/download",
+  jwtAuthGuard,
+  entitlementGuard("BILLING"),
+  permissionsGuard("BILLING.SUBSCRIPTION.VIEW"),
+  downloadTenantInvoiceHandler,
+);
+
+router.get(
+  "/billing/usage",
+  jwtAuthGuard,
+  entitlementGuard("BILLING"),
+  permissionsGuard("BILLING.SUBSCRIPTION.VIEW"),
+  getBillingUsageHandler,
+);
+
+router.post(
+  "/billing/checkout",
+  jwtAuthGuard,
+  entitlementGuard("BILLING"),
+  permissionsGuard("BILLING.SUBSCRIPTION.MANAGE"),
+  idempotencyGuard,
+  startBillingCheckoutHandler,
+);
+
+router.post(
+  "/billing/change-plan",
+  jwtAuthGuard,
+  entitlementGuard("BILLING"),
+  permissionsGuard("BILLING.SUBSCRIPTION.MANAGE"),
+  idempotencyGuard,
+  changeSubscriptionPlanHandler,
+);
+
+router.post(
+  "/billing/cancel",
+  jwtAuthGuard,
+  entitlementGuard("BILLING"),
+  permissionsGuard("BILLING.SUBSCRIPTION.MANAGE"),
+  idempotencyGuard,
+  cancelSubscriptionHandler,
 );
 
 export default router;

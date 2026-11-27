@@ -34,6 +34,10 @@ export const STANDARD_PERMISSIONS = [
   { code: "REPORTS.ANALYTICS.VIEW", moduleCode: "REPORTS", description: "View department-wise analytics across enabled modules" },
   { code: "REPORTS.EXPORT.CREATE", moduleCode: "REPORTS", description: "Trigger async CSV, XLSX, and PDF report exports" },
 
+  // Tenant Subscription & Billing
+  { code: "BILLING.SUBSCRIPTION.VIEW", moduleCode: "BILLING", description: "View available plans, current subscription, invoices, and usage" },
+  { code: "BILLING.SUBSCRIPTION.MANAGE", moduleCode: "BILLING", description: "Start checkout, change plans, and cancel subscription" },
+
   // CRM
   { code: "CRM.LEADS.VIEW", moduleCode: "CRM", description: "View CRM leads and customer records" },
   { code: "CRM.LEADS.MANAGE", moduleCode: "CRM", description: "Create, edit and manage CRM leads" },

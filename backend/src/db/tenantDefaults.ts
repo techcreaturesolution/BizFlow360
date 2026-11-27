@@ -38,6 +38,11 @@ export const STANDARD_PERMISSIONS = [
   { code: "BILLING.SUBSCRIPTION.VIEW", moduleCode: "BILLING", description: "View available plans, current subscription, invoices, and usage" },
   { code: "BILLING.SUBSCRIPTION.MANAGE", moduleCode: "BILLING", description: "Start checkout, change plans, and cancel subscription" },
 
+  // Approvals & Notifications
+  { code: "APPROVALS.INBOX.VIEW", moduleCode: "APPROVALS", description: "View pending quotation, expense, and purchase approval queue" },
+  { code: "APPROVALS.INBOX.DECIDE", moduleCode: "APPROVALS", description: "Approve or reject pending approval requests" },
+  { code: "NOTIFICATIONS.ALERTS.VIEW", moduleCode: "NOTIFICATIONS", description: "View in-app notifications and manage alert preferences" },
+
   // CRM
   { code: "CRM.LEADS.VIEW", moduleCode: "CRM", description: "View CRM leads and customer records" },
   { code: "CRM.LEADS.MANAGE", moduleCode: "CRM", description: "Create, edit and manage CRM leads" },

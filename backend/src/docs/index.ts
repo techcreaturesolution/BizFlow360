@@ -1,6 +1,7 @@
 // Sabhi module ke Swagger docs ko role-wise specs + combined OpenAPI 3.0.3 document mein merge karta hai.
 import { env, isProd } from "../config/env";
 import { authDoc } from "./auth/auth.doc";
+import { approvalsNotificationsDoc } from "./businessOwner/approvalsNotifications.doc";
 import { businessOwnerDoc } from "./businessOwner/businessOwner.doc";
 import { companySetupDoc } from "./businessOwner/companySetup.doc";
 import { dashboardReportsDoc } from "./businessOwner/dashboardReports.doc";
@@ -68,6 +69,7 @@ const businessOwnerModules: DocModule[] = [
   companySetupDoc,
   dashboardReportsDoc,
   tenantBillingDoc,
+  approvalsNotificationsDoc,
 ];
 
 export const sharedSwaggerDocument = buildOpenApiSpec(

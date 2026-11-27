@@ -46,6 +46,16 @@ import {
   listTenantInvoicesHandler,
   startBillingCheckoutHandler,
 } from "./tenantBilling.controller";
+import {
+  approveRequestHandler,
+  getApprovalInboxHandler,
+  getNotificationPreferencesHandler,
+  listNotificationsHandler,
+  markAllNotificationsReadHandler,
+  markNotificationReadHandler,
+  rejectRequestHandler,
+  updateNotificationPreferencesHandler,
+} from "./approvalsNotifications.controller";
 
 const router = Router();
 
@@ -352,6 +362,75 @@ router.post(
   permissionsGuard("BILLING.SUBSCRIPTION.MANAGE"),
   idempotencyGuard,
   cancelSubscriptionHandler,
+);
+
+// ==========================================
+// E. Approvals & Notifications
+// ==========================================
+router.get(
+  "/approvals/inbox",
+  jwtAuthGuard,
+  entitlementGuard("APPROVALS"),
+  permissionsGuard("APPROVALS.INBOX.VIEW"),
+  getApprovalInboxHandler,
+);
+
+router.post(
+  "/approvals/:id/approve",
+  jwtAuthGuard,
+  entitlementGuard("APPROVALS"),
+  permissionsGuard("APPROVALS.INBOX.DECIDE"),
+  idempotencyGuard,
+  approveRequestHandler,
+);
+
+router.post(
+  "/approvals/:id/reject",
+  jwtAuthGuard,
+  entitlementGuard("APPROVALS"),
+  permissionsGuard("APPROVALS.INBOX.DECIDE"),
+  idempotencyGuard,
+  rejectRequestHandler,
+);
+
+router.get(
+  "/notifications",
+  jwtAuthGuard,
+  entitlementGuard("NOTIFICATIONS"),
+  permissionsGuard("NOTIFICATIONS.ALERTS.VIEW"),
+  listNotificationsHandler,
+);
+
+router.patch(
+  "/notifications/:id/read",
+  jwtAuthGuard,
+  entitlementGuard("NOTIFICATIONS"),
+  permissionsGuard("NOTIFICATIONS.ALERTS.VIEW"),
+  markNotificationReadHandler,
+);
+
+router.post(
+  "/notifications/read-all",
+  jwtAuthGuard,
+  entitlementGuard("NOTIFICATIONS"),
+  permissionsGuard("NOTIFICATIONS.ALERTS.VIEW"),
+  markAllNotificationsReadHandler,
+);
+
+router.get(
+  "/notification-preferences",
+  jwtAuthGuard,
+  entitlementGuard("NOTIFICATIONS"),
+  permissionsGuard("NOTIFICATIONS.ALERTS.VIEW"),
+  getNotificationPreferencesHandler,
+);
+
+router.put(
+  "/notification-preferences",
+  jwtAuthGuard,
+  entitlementGuard("NOTIFICATIONS"),
+  permissionsGuard("NOTIFICATIONS.ALERTS.VIEW"),
+  updateNotificationPreferencesHandler,
 );
 
 export default router;
